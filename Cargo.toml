@@ -1,0 +1,9 @@
+[package]
+name = "multi-gpu-shadows"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxidx = "0.3.2"
+gltf = "1.4.1"
+glam = "0.29.2"
