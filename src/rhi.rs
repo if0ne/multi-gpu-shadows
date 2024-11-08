@@ -1,9 +1,6 @@
-use std::{
-    cell::RefCell,
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
-use oxidx::dx::{self, IDescriptorHeap, IDevice, IFence};
+use oxidx::dx::{self, ICommandQueue, IDescriptorHeap, IDevice, IFence};
 
 pub struct DescriptorHeap {
     pub heap: dx::DescriptorHeap,
@@ -15,7 +12,7 @@ pub struct DescriptorHeap {
 }
 
 impl DescriptorHeap {
-    pub fn new(device: dx::Device, ty: dx::DescriptorHeapType, size: usize) -> Self {
+    pub fn new(device: &dx::Device, ty: dx::DescriptorHeapType, size: usize) -> Self {
         let descriptors = RefCell::new(vec![false; size]);
 
         let (shader_visible, flags) =
@@ -87,23 +84,27 @@ impl Drop for Descriptor {
 
 pub struct Fence {
     pub fence: dx::Fence,
-    pub value: u64,
+    pub value: RefCell<u64>,
 }
 
 impl Fence {
-    pub fn new(device: dx::Device) -> Self {
-        let fence = device.create_fence(0, dx::FenceFlags::empty()).expect("Failed to create fence");
+    pub fn new(device: &dx::Device) -> Self {
+        let fence = device
+            .create_fence(0, dx::FenceFlags::empty())
+            .expect("Failed to create fence");
 
         Self {
             fence,
-            value: 0,
+            value: Default::default(),
         }
     }
 
     pub fn wait(&self, value: u64) {
         if self.completed_value() < value {
             let event = dx::Event::create(false, false).expect("Failed to create event");
-            self.fence.set_event_on_completion(value, event).expect("Failed to bind fence to event");
+            self.fence
+                .set_event_on_completion(value, event)
+                .expect("Failed to bind fence to event");
             if event.wait(10_000_000) == 0x00000102 {
                 panic!("Device lost")
             }
@@ -112,5 +113,33 @@ impl Fence {
 
     pub fn completed_value(&self) -> u64 {
         self.fence.get_completed_value()
+    }
+}
+
+pub struct CommandQueue {
+    pub queue: dx::CommandQueue,
+    pub ty: dx::CommandListType,
+}
+
+impl CommandQueue {
+    pub fn new(device: &dx::Device, ty: dx::CommandListType) -> Self {
+        let queue = device
+            .create_command_queue(&dx::CommandQueueDesc::new(ty))
+            .expect("Failed to create command queue");
+
+        Self { queue, ty }
+    }
+
+    pub fn wait(&self, fence: &Fence, value: u64) {
+        self.queue
+            .wait(&fence.fence, value)
+            .expect("Failed to queue wait");
+    }
+
+    pub fn signal(&self, fence: &Fence) -> u64 {
+        let mut guard = fence.value.borrow_mut();
+        *guard += 1;
+        self.queue.signal(&fence.fence, *guard);
+        *guard
     }
 }
