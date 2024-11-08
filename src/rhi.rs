@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use oxidx::dx::{self, IDescriptorHeap, IDevice};
+use oxidx::dx::{self, IDescriptorHeap, IDevice, IFence};
 
 pub struct DescriptorHeap {
     pub heap: dx::DescriptorHeap,
@@ -82,5 +82,35 @@ pub struct Descriptor {
 impl Drop for Descriptor {
     fn drop(&mut self) {
         self.parent.descriptors.borrow_mut()[self.heap_index] = false;
+    }
+}
+
+pub struct Fence {
+    pub fence: dx::Fence,
+    pub value: u64,
+}
+
+impl Fence {
+    pub fn new(device: dx::Device) -> Self {
+        let fence = device.create_fence(0, dx::FenceFlags::empty()).expect("Failed to create fence");
+
+        Self {
+            fence,
+            value: 0,
+        }
+    }
+
+    pub fn wait(&self, value: u64) {
+        if self.completed_value() < value {
+            let event = dx::Event::create(false, false).expect("Failed to create event");
+            self.fence.set_event_on_completion(value, event).expect("Failed to bind fence to event");
+            if event.wait(10_000_000) == 0x00000102 {
+                panic!("Device lost")
+            }
+        }
+    }
+
+    pub fn completed_value(&self) -> u64 {
+        self.fence.get_completed_value()
     }
 }
