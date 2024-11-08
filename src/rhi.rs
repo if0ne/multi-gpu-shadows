@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use oxidx::dx::{self, ICommandQueue, IDescriptorHeap, IDevice, IFence};
+use oxidx::dx::{self, ICommandQueue, IDescriptorHeap, IDevice, IFence, IResource};
 
 use crate::utils::new_uuid;
 
@@ -244,5 +244,12 @@ impl Texture {
             format,
             state: RefCell::new(dx::ResourceStates::Common),
         }
+    }
+
+    pub fn get_size(&self, device: dx::Device, mip: Option<u32>) -> usize {
+        let mip = mip.map(|m| m..(m + 1)).unwrap_or(0..self.levels);
+
+        let desc = self.res.res.get_desc();
+        device.get_copyable_footprints(&desc, mip, 0, &mut vec![], &mut vec![], &mut vec![])
     }
 }
