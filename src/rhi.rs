@@ -197,3 +197,52 @@ impl<'a> GpuResourceTracker<'a> {
         }
     }
 }
+
+pub struct Texture {
+    pub res: GpuResource,
+    pub uuid: u64,
+    pub width: u32,
+    pub height: u32,
+    pub levels: u32,
+    pub format: dx::Format,
+    pub state: RefCell<dx::ResourceStates>,
+}
+
+impl Texture {
+    pub fn new(
+        tracker: &GpuResourceTracker,
+        width: u32,
+        height: u32,
+        format: dx::Format,
+        levels: u32,
+        flags: dx::ResourceFlags,
+        name: impl ToString,
+    ) -> Self {
+        let name = name.to_string();
+        let uuid = new_uuid();
+        let desc = dx::ResourceDesc::texture_2d(width, height)
+            .with_alignment(dx::HeapAlignment::ResourcePlacement)
+            .with_array_size(1)
+            .with_format(format)
+            .with_mip_levels(levels)
+            .with_layout(dx::TextureLayout::Unknown)
+            .with_flags(flags);
+
+        let res = tracker.alloc(
+            &desc,
+            &dx::HeapProperties::default(),
+            dx::ResourceStates::Common,
+            name,
+        );
+
+        Self {
+            res,
+            uuid,
+            width,
+            height,
+            levels,
+            format,
+            state: RefCell::new(dx::ResourceStates::Common),
+        }
+    }
+}
