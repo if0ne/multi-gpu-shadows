@@ -152,12 +152,12 @@ pub struct GpuResource {
     pub uuid: u64,
 }
 
-pub struct GpuResourceTracker<'a> {
-    pub tracked: RefCell<Vec<&'a GpuResource>>,
+pub struct GpuResourceTracker {
+    pub tracked: RefCell<Vec<Rc<GpuResource>>>,
     pub device: dx::Device,
 }
 
-impl<'a> GpuResourceTracker<'a> {
+impl GpuResourceTracker {
     pub fn new(device: dx::Device) -> Self {
         Self {
             device,
@@ -171,7 +171,7 @@ impl<'a> GpuResourceTracker<'a> {
         heap_props: &dx::HeapProperties,
         state: dx::ResourceStates,
         name: impl ToString,
-    ) -> GpuResource {
+    ) -> Rc<GpuResource> {
         let name = name.to_string();
         let uuid = new_uuid();
 
@@ -180,14 +180,17 @@ impl<'a> GpuResourceTracker<'a> {
             .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
             .expect(&format!("Failed to create resource {}", name));
 
-        GpuResource { res, name, uuid }
+        let res = Rc::new(GpuResource { res, name, uuid });
+        self.register(Rc::clone(&res));
+
+        res
     }
 
-    pub fn register(&self, res: &'a GpuResource) {
+    pub fn register(&self, res: Rc<GpuResource>) {
         self.tracked.borrow_mut().push(res);
     }
 
-    pub fn free(&self, res: &'a GpuResource) {
+    pub fn free(&self, res: &GpuResource) {
         self.tracked.borrow_mut().retain(|r| r.uuid != res.uuid);
     }
 
@@ -199,7 +202,7 @@ impl<'a> GpuResourceTracker<'a> {
 }
 
 pub struct Texture {
-    pub res: GpuResource,
+    pub res: Rc<GpuResource>,
     pub uuid: u64,
     pub width: u32,
     pub height: u32,
@@ -251,5 +254,29 @@ impl Texture {
 
         let desc = self.res.res.get_desc();
         device.get_copyable_footprints(&desc, mip, 0, &mut vec![], &mut vec![], &mut vec![])
+    }
+}
+
+pub enum TextureViewType {
+    RenderTarget,
+    DepthTarget,
+    ShaderResource,
+    Storage,
+}
+
+pub struct TextureView {
+    pub parent: Rc<Texture>,
+    pub ty: TextureViewType,
+    pub handle: Descriptor,
+}
+
+impl TextureView {
+    pub fn new(
+        device: dx::Device,
+        parent: Rc<Texture>,
+        ty: TextureViewType,
+        mip: Option<u32>,
+    ) -> Self {
+        todo!()
     }
 }
