@@ -2,6 +2,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use oxidx::dx::{self, ICommandQueue, IDescriptorHeap, IDevice, IFence};
 
+use crate::utils::new_uuid;
+
 pub struct DescriptorHeap {
     pub heap: dx::DescriptorHeap,
     pub ty: dx::DescriptorHeapType,
@@ -141,5 +143,57 @@ impl CommandQueue {
         *guard += 1;
         self.queue.signal(&fence.fence, *guard);
         *guard
+    }
+}
+
+pub struct GpuResource {
+    pub res: dx::Resource,
+    pub name: String,
+    pub uuid: u64,
+}
+
+pub struct GpuResourceTracker<'a> {
+    pub tracked: RefCell<Vec<&'a GpuResource>>,
+    pub device: dx::Device,
+}
+
+impl<'a> GpuResourceTracker<'a> {
+    pub fn new(device: dx::Device) -> Self {
+        Self {
+            device,
+            tracked: Default::default(),
+        }
+    }
+
+    pub fn alloc(
+        &self,
+        desc: &dx::ResourceDesc,
+        heap_props: &dx::HeapProperties,
+        state: dx::ResourceStates,
+        name: impl ToString,
+    ) -> GpuResource {
+        let name = name.to_string();
+        let uuid = new_uuid();
+
+        let res = self
+            .device
+            .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
+            .expect(&format!("Failed to create resource {}", name));
+
+        GpuResource { res, name, uuid }
+    }
+
+    pub fn register(&self, res: &'a GpuResource) {
+        self.tracked.borrow_mut().push(res);
+    }
+
+    pub fn free(&self, res: &'a GpuResource) {
+        self.tracked.borrow_mut().retain(|r| r.uuid != res.uuid);
+    }
+
+    pub fn report(&self) {
+        for res in self.tracked.borrow().iter() {
+            println!("[d3d12] report reosurce {}", res.name)
+        }
     }
 }
