@@ -1,8 +1,102 @@
 use std::{cell::RefCell, rc::Rc};
 
-use oxidx::dx::{self, ICommandQueue, IDescriptorHeap, IDevice, IFence, IResource};
+use oxidx::dx::{
+    self, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4,
+    IFactory6, IFence, IResource,
+};
 
 use crate::utils::new_uuid;
+
+pub struct Device {
+    pub factory: dx::Factory4,
+    pub adapter: dx::Adapter3,
+    pub gpu: dx::Device,
+    pub debug: Option<dx::Debug1>,
+    pub rtv_heap: Rc<DescriptorHeap>,
+    pub dsv_heap: Rc<DescriptorHeap>,
+    pub shader_heap: Rc<DescriptorHeap>,
+    pub sampler_heap: Rc<DescriptorHeap>,
+}
+
+impl Device {
+    pub fn new(use_debug: bool) -> Self {
+        let flags = if use_debug {
+            dx::FactoryCreationFlags::Debug
+        } else {
+            dx::FactoryCreationFlags::empty()
+        };
+
+        let factory = dx::create_factory4(flags).expect("Failed to create DXGI factory");
+        let adapter = Self::get_adapter(&factory, true);
+
+        let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
+            .expect("Failed to create device");
+
+        let debug = if use_debug {
+            let debug: dx::Debug1 = dx::create_debug()
+                .expect("Failed to create debug")
+                .try_into()
+                .expect("Faile to fetch debug1");
+
+            debug.enable_debug_layer();
+            debug.set_enable_gpu_based_validation(true);
+            debug.set_callback(Box::new(|_, _, _, msg| {
+                println!("[d3d12] {}", msg);
+            }));
+
+            Some(debug)
+        } else {
+            None
+        };
+
+        let rtv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Rtv, 2048);
+        let dsv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Dsv, 2048);
+        let shader_heap =
+            DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1_000_000);
+        let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 1024);
+
+        Self {
+            factory,
+            adapter,
+            gpu: device,
+            debug,
+            rtv_heap: Rc::new(rtv_heap),
+            dsv_heap: Rc::new(dsv_heap),
+            shader_heap: Rc::new(shader_heap),
+            sampler_heap: Rc::new(sampler_heap),
+        }
+    }
+
+    fn get_adapter(factory: &dx::Factory4, high_perf: bool) -> dx::Adapter3 {
+        if let Ok(factory) = TryInto::<dx::Factory7>::try_into(factory.clone()) {
+            let mut i = 0;
+            let pref = if high_perf {
+                dx::GpuPreference::HighPerformance
+            } else {
+                dx::GpuPreference::Unspecified
+            };
+
+            while let Ok(adapter) = factory.enum_adapters_by_gpu_preference(i, pref) {
+                if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
+                    return adapter;
+                }
+
+                i += 1;
+            }
+        }
+
+        let mut i = 0;
+        while let Ok(adapter) = factory.enum_adapters(i) {
+            if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
+                return adapter;
+            }
+
+            i += 1;
+        }
+
+        panic!("Failed to fetch adapter")
+    }
+}
 
 pub struct DescriptorHeap {
     pub heap: dx::DescriptorHeap,
@@ -41,12 +135,12 @@ impl DescriptorHeap {
     }
 
     pub fn alloc(self: &Rc<Self>) -> Descriptor {
-        let Some((index, val)) = self
-            .descriptors
-            .borrow_mut()
+        let mut descriptors = self.descriptors.borrow_mut();
+
+        let Some((index, val)) = descriptors
             .iter_mut()
             .enumerate()
-            .skip_while(|(i, b)| **b == true)
+            .skip_while(|(_, b)| **b == true)
             .next()
         else {
             panic!("Out of memory in descriptor heap");
@@ -56,11 +150,11 @@ impl DescriptorHeap {
         let cpu = self
             .heap
             .get_cpu_descriptor_handle_for_heap_start()
-            .forward(index, self.inc_size);
+            .advance(index, self.inc_size);
         let gpu = self
             .heap
             .get_gpu_descriptor_handle_for_heap_start()
-            .forward(index, self.inc_size);
+            .advance(index, self.inc_size);
 
         Descriptor {
             heap_index: index,
@@ -90,8 +184,9 @@ pub struct Fence {
 }
 
 impl Fence {
-    pub fn new(device: &dx::Device) -> Self {
+    pub fn new(device: &Device) -> Self {
         let fence = device
+            .gpu
             .create_fence(0, dx::FenceFlags::empty())
             .expect("Failed to create fence");
 
@@ -124,8 +219,9 @@ pub struct CommandQueue {
 }
 
 impl CommandQueue {
-    pub fn new(device: &dx::Device, ty: dx::CommandListType) -> Self {
+    pub fn new(device: &Device, ty: dx::CommandListType) -> Self {
         let queue = device
+            .gpu
             .create_command_queue(&dx::CommandQueueDesc::new(ty))
             .expect("Failed to create command queue");
 
@@ -141,7 +237,9 @@ impl CommandQueue {
     pub fn signal(&self, fence: &Fence) -> u64 {
         let mut guard = fence.value.borrow_mut();
         *guard += 1;
-        self.queue.signal(&fence.fence, *guard);
+        self.queue
+            .signal(&fence.fence, *guard)
+            .expect("Failed to signal");
         *guard
     }
 }
@@ -154,13 +252,13 @@ pub struct GpuResource {
 
 pub struct GpuResourceTracker {
     pub tracked: RefCell<Vec<Rc<GpuResource>>>,
-    pub device: dx::Device,
+    pub device: Rc<Device>,
 }
 
 impl GpuResourceTracker {
-    pub fn new(device: dx::Device) -> Self {
+    pub fn new(device: &Rc<Device>) -> Self {
         Self {
-            device,
+            device: Rc::clone(device),
             tracked: Default::default(),
         }
     }
@@ -177,6 +275,7 @@ impl GpuResourceTracker {
 
         let res = self
             .device
+            .gpu
             .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
             .expect(&format!("Failed to create resource {}", name));
 
@@ -272,11 +371,73 @@ pub struct TextureView {
 
 impl TextureView {
     pub fn new(
-        device: dx::Device,
+        device: &Device,
         parent: Rc<Texture>,
         ty: TextureViewType,
         mip: Option<u32>,
     ) -> Self {
-        todo!()
+        let handle = match ty {
+            TextureViewType::RenderTarget => {
+                let handle = device.rtv_heap.alloc();
+                device.gpu.create_render_target_view(
+                    Some(&parent.res.res),
+                    Some(&dx::RenderTargetViewDesc::texture_2d(parent.format, 0, 0)),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::DepthTarget => {
+                let handle = device.dsv_heap.alloc();
+                device.gpu.create_depth_stencil_view(
+                    Some(&parent.res.res),
+                    Some(&dx::DepthStencilViewDesc::texture_2d(parent.format, 0)),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::ShaderResource => {
+                let (mip, detailed) = if let Some(mip) = mip {
+                    (1, mip)
+                } else {
+                    (parent.levels, 0)
+                };
+
+                let handle = device.shader_heap.alloc();
+                device.gpu.create_shader_resource_view(
+                    Some(&parent.res.res),
+                    Some(&dx::ShaderResourceViewDesc::texture_2d(
+                        parent.format,
+                        detailed,
+                        mip,
+                        0.0,
+                        0,
+                    )),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::Storage => {
+                let mip = mip.unwrap_or(0);
+                let handle = device.shader_heap.alloc();
+
+                device.gpu.create_unordered_access_view(
+                    Some(&parent.res.res),
+                    dx::RES_NONE,
+                    Some(&dx::UnorderedAccessViewDesc::texture_2d(
+                        parent.format,
+                        mip,
+                        0,
+                    )),
+                    handle.cpu,
+                );
+                handle
+            },
+        };
+
+        Self {
+            parent,
+            ty,
+            handle,
+        }
     }
 }
