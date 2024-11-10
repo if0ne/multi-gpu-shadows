@@ -1,11 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, num::NonZero, rc::Rc};
 
 use oxidx::dx::{
     self, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4,
-    IFactory6, IFence, IResource,
+    IFactory6, IFence, IResource, ISwapchain1,
 };
 
 use crate::utils::new_uuid;
+
+pub const FRAMES_IN_FLIGHT: usize = 3;
 
 pub struct Device {
     pub factory: dx::Factory4,
@@ -431,13 +433,100 @@ impl TextureView {
                     handle.cpu,
                 );
                 handle
-            },
+            }
         };
 
-        Self {
-            parent,
-            ty,
-            handle,
+        Self { parent, ty, handle }
+    }
+}
+
+pub struct Swapchain {
+    pub swapchain: dx::Swapchain1,
+    pub hwnd: NonZero<isize>,
+    pub resources: Vec<(dx::Resource, Rc<Texture>, TextureView)>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Swapchain {
+    pub fn new(
+        device: &Device,
+        present_queue: &CommandQueue,
+        width: u32,
+        height: u32,
+        hwnd: NonZero<isize>,
+    ) -> Self {
+        let desc = dx::SwapchainDesc1::new(width, height)
+            .with_format(dx::Format::Rgba8Unorm)
+            .with_usage(dx::FrameBufferUsage::RenderTargetOutput)
+            .with_buffer_count(FRAMES_IN_FLIGHT)
+            .with_scaling(dx::Scaling::None)
+            .with_swap_effect(dx::SwapEffect::FlipSequential);
+
+        let swapchain = device
+            .factory
+            .create_swapchain_for_hwnd(&present_queue.queue, hwnd, &desc, None, dx::OUTPUT_NONE)
+            .expect("Failed to create swapchain");
+
+        let mut swapchain = Self {
+            swapchain,
+            hwnd,
+            resources: vec![],
+            width,
+            height,
+        };
+        swapchain.resize(device, width, height);
+
+        swapchain
+    }
+
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+        {
+            std::mem::take(&mut self.resources);
+        }
+
+        self.swapchain
+            .resize_buffers(
+                FRAMES_IN_FLIGHT,
+                width,
+                height,
+                dx::Format::Unknown,
+                dx::SwapchainFlags::empty(),
+            )
+            .expect("Failed to resize swapchain");
+
+        for i in 0..FRAMES_IN_FLIGHT {
+            let res: dx::Resource = self
+                .swapchain
+                .get_buffer(i)
+                .expect("Failed to get swapchain buffer");
+            let descriptor = device.rtv_heap.alloc();
+
+            device
+                .gpu
+                .create_render_target_view(Some(&res), None, descriptor.cpu);
+
+            let texture = Rc::new(Texture {
+                res: Rc::new(GpuResource {
+                    res: res.clone(),
+                    name: "Swapchain Image".to_string(),
+                    uuid: 0,
+                }),
+                uuid: 0,
+                width,
+                height,
+                levels: 1,
+                format: dx::Format::Rgba8Unorm,
+                state: RefCell::new(dx::ResourceStates::Common),
+            });
+
+            let view = TextureView {
+                parent: Rc::clone(&texture),
+                ty: TextureViewType::RenderTarget,
+                handle: descriptor,
+            };
+
+            self.resources.push((res, texture, view));
         }
     }
 }
