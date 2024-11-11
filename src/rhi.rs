@@ -529,4 +529,12 @@ impl Swapchain {
             self.resources.push((res, texture, view));
         }
     }
+
+    pub fn present(&self, vsync: bool) {
+        let interval = if vsync { 1 } else { 0 };
+
+        self.swapchain
+            .present(interval, dx::PresentFlags::empty())
+            .expect("Failed to present");
+    }
 }
