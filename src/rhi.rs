@@ -838,3 +838,57 @@ impl<'a, T> Drop for BufferMap<'a, T> {
         self.buffer.res.res.unmap(0, self.range.clone());
     }
 }
+
+pub enum SamplerAddress {
+    Wrap,
+    Mirror,
+    Clamp,
+    Border,
+}
+
+impl SamplerAddress {
+    pub(crate) fn as_dx(&self) -> dx::AddressMode {
+        match self {
+            SamplerAddress::Wrap => dx::AddressMode::Wrap,
+            SamplerAddress::Mirror => dx::AddressMode::Mirror,
+            SamplerAddress::Clamp => dx::AddressMode::Clamp,
+            SamplerAddress::Border => dx::AddressMode::Border,
+        }
+    }
+}
+
+pub enum SamplerFilter {
+    Nearest,
+    Linear,
+    Anisotropic,
+}
+
+impl SamplerFilter {
+    pub(crate) fn as_dx(&self) -> dx::Filter {
+        match self {
+            SamplerFilter::Nearest => dx::Filter::Point,
+            SamplerFilter::Linear => dx::Filter::Linear,
+            SamplerFilter::Anisotropic => dx::Filter::Anisotropic,
+        }
+    }
+}
+
+pub struct Sampler {
+    pub handle: Descriptor,
+}
+
+impl Sampler {
+    pub fn new(device: &Device, address: SamplerAddress, filter: SamplerFilter) -> Self {
+        let handle = device.sampler_heap.alloc();
+
+        let desc = dx::SamplerDesc::new(filter.as_dx())
+            .with_address_u(address.as_dx())
+            .with_address_v(address.as_dx())
+            .with_address_w(address.as_dx())
+            .with_comparison_func(dx::ComparisonFunc::Never);
+
+        device.gpu.create_sampler(&desc, handle.cpu);
+
+        Self { handle }
+    }
+}
