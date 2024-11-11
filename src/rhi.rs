@@ -977,7 +977,7 @@ impl CommandBuffer {
         {
             dx::ResourceBarrier::uav(&buffer.res.res)
         } else {
-            dx::ResourceBarrier::transition(&buffer.res.res, *old_state, state)
+            dx::ResourceBarrier::transition(&buffer.res.res, *old_state, state, None)
         };
 
         self.list.resource_barrier(&[barrier]);
@@ -1001,7 +1001,7 @@ impl CommandBuffer {
         {
             dx::ResourceBarrier::uav(&texture.res.res)
         } else {
-            dx::ResourceBarrier::transition(&texture.res.res, *old_state, state)
+            dx::ResourceBarrier::transition(&texture.res.res, *old_state, state, None)
         };
 
         let barrier = if let Some(mip) = mip {
