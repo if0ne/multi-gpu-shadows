@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZero, ops::Range, rc::Rc};
 
 use oxidx::dx::{
     self, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4,
@@ -358,6 +358,7 @@ impl Texture {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TextureViewType {
     RenderTarget,
     DepthTarget,
@@ -652,5 +653,188 @@ pub struct GraphicsPipeline {
 impl GraphicsPipeline {
     pub fn new(device: &Device, desc: &PipelineDesc) -> Self {
         todo!()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BufferType {
+    Vertex,
+    Index,
+    Constant,
+    Storage,
+    Copy,
+}
+
+pub struct Buffer {
+    pub res: Rc<GpuResource>,
+    pub ty: BufferType,
+    pub state: RefCell<dx::ResourceStates>,
+
+    pub size: usize,
+    pub stride: usize,
+
+    pub srv: Option<Descriptor>,
+    pub uav: Option<Descriptor>,
+    pub cbv: Option<Descriptor>,
+
+    pub vbv: Option<dx::VertexBufferView>,
+    pub ibv: Option<dx::IndexBufferView>,
+}
+
+impl Buffer {
+    pub fn new(
+        gpu_tracker: &GpuResourceTracker,
+        size: usize,
+        stride: usize,
+        ty: BufferType,
+        readback: bool,
+        name: impl ToString,
+    ) -> Self {
+        let heap_props = match ty {
+            BufferType::Constant | BufferType::Copy => dx::HeapProperties::upload(),
+            _ => {
+                if readback {
+                    dx::HeapProperties::readback()
+                } else {
+                    dx::HeapProperties::default()
+                }
+            }
+        };
+
+        let state = match ty {
+            BufferType::Constant => dx::ResourceStates::GenericRead,
+            _ => dx::ResourceStates::Common,
+        };
+
+        let flags = if ty == BufferType::Storage {
+            dx::ResourceFlags::AllowUnorderedAccess
+        } else {
+            dx::ResourceFlags::empty()
+        };
+
+        let desc = dx::ResourceDesc::buffer(size).with_flags(flags);
+
+        let res = gpu_tracker.alloc(&desc, &heap_props, state, name);
+
+        let vbv = if ty == BufferType::Vertex {
+            Some(dx::VertexBufferView::new(
+                res.res.get_gpu_virtual_address(),
+                stride,
+                size,
+            ))
+        } else {
+            None
+        };
+
+        let ibv = if ty == BufferType::Index {
+            Some(dx::IndexBufferView::new(
+                res.res.get_gpu_virtual_address(),
+                size,
+                dx::Format::R16Uint,
+            ))
+        } else {
+            None
+        };
+
+        Self {
+            res,
+            ty,
+            state: RefCell::new(state),
+            size,
+            stride,
+            srv: None,
+            uav: None,
+            cbv: None,
+            vbv,
+            ibv,
+        }
+    }
+
+    pub fn build_constant(&mut self, device: &Device) {
+        if self.cbv.is_some() {
+            return;
+        }
+
+        let d = device.shader_heap.alloc();
+        let desc =
+            dx::ConstantBufferViewDesc::new(self.res.res.get_gpu_virtual_address(), self.size);
+        device.gpu.create_constant_buffer_view(Some(&desc), d.cpu);
+
+        self.cbv = Some(d);
+    }
+
+    pub fn build_storage(&mut self, device: &Device) {
+        if self.uav.is_some() {
+            return;
+        }
+
+        let d = device.shader_heap.alloc();
+        let desc = dx::UnorderedAccessViewDesc::buffer(
+            dx::Format::Unknown,
+            0..self.size,
+            1,
+            0,
+            dx::BufferUavFlags::empty(),
+        );
+        device
+            .gpu
+            .create_unordered_access_view(Some(&self.res.res), None, Some(&desc), d.cpu);
+
+        self.uav = Some(d);
+    }
+
+    pub fn build_shader_resource(&mut self, device: &Device) {
+        if self.srv.is_some() {
+            return;
+        }
+
+        let d = device.shader_heap.alloc();
+        let desc = dx::ShaderResourceViewDesc::buffer(
+            dx::Format::Unknown,
+            0..(self.size / self.stride),
+            self.stride,
+            dx::BufferSrvFlags::empty(),
+        );
+        device
+            .gpu
+            .create_shader_resource_view(Some(&self.res.res), Some(&desc), d.cpu);
+
+        self.srv = Some(d);
+    }
+
+    pub fn map<'a, T>(&'a mut self, range: Option<Range<usize>>) -> BufferMap<'a, T> {
+        let size = if let Some(ref r) = range {
+            r.end - r.start
+        } else {
+            self.size
+        };
+
+        let pointer = self
+            .res
+            .res
+            .map::<T>(0, range.clone())
+            .expect("Failed to map buffer");
+
+        unsafe {
+            let pointer = std::slice::from_raw_parts_mut(pointer.as_ptr(), size);
+
+            BufferMap {
+                buffer: self,
+                range,
+                pointer,
+            }
+        }
+    }
+}
+
+pub struct BufferMap<'a, T> {
+    buffer: &'a Buffer,
+    range: Option<Range<usize>>,
+    pub pointer: &'a mut [T],
+}
+
+impl<'a, T> Drop for BufferMap<'a, T> {
+    fn drop(&mut self) {
+        self.buffer.res.res.unmap(0, self.range.clone());
     }
 }
