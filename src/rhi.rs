@@ -1,8 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZero, ops::Range, rc::Rc};
 
+use gltf::buffer;
 use oxidx::dx::{
-    self, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4,
-    IFactory6, IFence, IResource, ISwapchain1,
+    self, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice,
+    IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, ISwapchain1, PSO_NONE,
 };
 
 use crate::utils::new_uuid;
@@ -839,6 +840,7 @@ impl<'a, T> Drop for BufferMap<'a, T> {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SamplerAddress {
     Wrap,
     Mirror,
@@ -857,6 +859,7 @@ impl SamplerAddress {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SamplerFilter {
     Nearest,
     Linear,
@@ -890,5 +893,219 @@ impl Sampler {
         device.gpu.create_sampler(&desc, handle.cpu);
 
         Self { handle }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GeomTopology {
+    Triangles,
+    Lines,
+}
+
+impl GeomTopology {
+    pub(crate) fn as_dx(&self) -> dx::PrimitiveTopology {
+        match self {
+            GeomTopology::Triangles => dx::PrimitiveTopology::Triangle,
+            GeomTopology::Lines => dx::PrimitiveTopology::Line,
+        }
+    }
+}
+
+pub struct CommandBuffer {
+    pub ty: dx::CommandListType,
+    pub list: dx::GraphicsCommandList,
+    pub allocator: dx::CommandAllocator,
+}
+
+impl CommandBuffer {
+    pub fn new(device: &Device, ty: dx::CommandListType, close: bool) -> Self {
+        let allocator = device
+            .gpu
+            .create_command_allocator(ty)
+            .expect("Failed to create command allocator");
+        let list: dx::GraphicsCommandList = device
+            .gpu
+            .create_command_list(0, ty, &allocator, PSO_NONE)
+            .expect("Failed to create command list");
+
+        if close {
+            list.close().expect("Failed to close");
+        }
+
+        Self {
+            ty,
+            list,
+            allocator,
+        }
+    }
+
+    pub fn begin(&self, device: &Device, reset: bool) {
+        if reset {
+            self.allocator.reset();
+            self.list
+                .reset(&self.allocator, PSO_NONE)
+                .expect("Failed to reset list");
+        }
+
+        self.list.set_descriptor_heaps(&[
+            Some(device.shader_heap.heap.clone()),
+            Some(device.sampler_heap.heap.clone()),
+        ]);
+    }
+
+    pub fn end(&self) {
+        self.list.close().expect("Failed to close list");
+    }
+
+    pub fn set_render_targets(&self, views: &[&TextureView], depth: Option<&TextureView>) {
+        let rtvs = views.iter().map(|view| view.handle.cpu).collect::<Vec<_>>();
+
+        let dsv = depth.map(|view| view.handle.cpu);
+
+        self.list.om_set_render_targets(&rtvs, false, dsv);
+    }
+
+    pub fn set_buffer_barrier(&self, buffer: &Buffer, state: dx::ResourceStates) {
+        let mut old_state = buffer.state.borrow_mut();
+
+        if *old_state == state {
+            return;
+        }
+
+        let barrier = if *old_state == dx::ResourceStates::UnorderedAccess
+            && state == dx::ResourceStates::UnorderedAccess
+        {
+            dx::ResourceBarrier::uav(&buffer.res.res)
+        } else {
+            dx::ResourceBarrier::transition(&buffer.res.res, *old_state, state)
+        };
+
+        self.list.resource_barrier(&[barrier]);
+        *old_state = state;
+    }
+
+    pub fn set_image_barrier(
+        &self,
+        texture: &Texture,
+        state: dx::ResourceStates,
+        mip: Option<u32>,
+    ) {
+        let mut old_state = texture.state.borrow_mut();
+
+        if *old_state == state {
+            return;
+        }
+
+        let barrier = if *old_state == dx::ResourceStates::UnorderedAccess
+            && state == dx::ResourceStates::UnorderedAccess
+        {
+            dx::ResourceBarrier::uav(&texture.res.res)
+        } else {
+            dx::ResourceBarrier::transition(&texture.res.res, *old_state, state)
+        };
+
+        let barrier = if let Some(mip) = mip {
+            barrier.with_subresource(mip)
+        } else {
+            barrier
+        };
+
+        self.list.resource_barrier(&[barrier]);
+        *old_state = state;
+    }
+
+    pub fn clear_render_target(&self, view: &TextureView, r: f32, g: f32, b: f32) {
+        self.list
+            .clear_render_target_view(view.handle.cpu, [r, g, b, 1.0], &[]);
+    }
+
+    pub fn clear_depth_target(&self, view: &TextureView) {
+        self.list
+            .clear_depth_stencil_view(view.handle.cpu, dx::ClearFlags::Depth, 1.0, 0, &[]);
+    }
+
+    pub fn set_graphics_pipeline(&self, pipeline: &GraphicsPipeline) {
+        self.list
+            .set_graphics_root_signature(pipeline.root_signature.as_ref().map(|rs| &rs.root));
+        self.list.set_pipeline_state(&pipeline.pso);
+    }
+
+    pub fn set_vertex_buffer(&self, buffer: &Buffer) {
+        self.list
+            .ia_set_vertex_buffers(0, &[buffer.vbv.expect("Expected vertex buffer")]);
+    }
+
+    pub fn set_index_buffer(&self, buffer: &Buffer) {
+        self.list
+            .ia_set_index_buffer(Some(&buffer.ibv.expect("Expected index buffer")));
+    }
+
+    pub fn set_graphics_srv(&self, view: &TextureView, index: usize) {
+        self.list
+            .set_graphics_root_descriptor_table(index, view.handle.gpu);
+    }
+
+    pub fn set_graphics_cbv(&self, buffer: &Buffer, index: usize) {
+        self.list.set_graphics_root_descriptor_table(
+            index,
+            buffer.cbv.expect("Expected constant buffer").gpu,
+        );
+    }
+
+    pub fn set_graphics_sampler(&self, sampler: &Sampler, index: usize) {
+        self.list
+            .set_graphics_root_descriptor_table(index, sampler.handle.gpu);
+    }
+
+    pub fn set_graphics_push_constants<T: Copy>(&self, data: &[T], index: usize) {
+        self.list.set_graphics_root_32bit_constants(index, data, 0);
+    }
+
+    pub fn set_viewport(&self, width: u32, height: u32) {
+        let viewport = dx::Viewport::from_size((width as f32, height as f32));
+        let rect = dx::Rect::default().with_size((width as i32, height as i32));
+
+        self.list.rs_set_viewports(&[viewport]);
+        self.list.rs_set_scissor_rects(&[rect]);
+    }
+
+    pub fn set_topology(&self, topo: GeomTopology) {
+        self.list.ia_set_primitive_topology(topo.as_dx());
+    }
+
+    pub fn draw(&self, count: u32) {
+        self.list.draw_instanced(count, 1, 0, 0);
+    }
+
+    pub fn copy_texture_to_texture(&self, dst: &Texture, src: &Texture) {
+        self.list.copy_resource(&dst.res.res, &src.res.res);
+    }
+
+    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &Buffer) {
+        let desc = dst.res.res.get_desc();
+        let mut footprints = vec![dx::PlacedSubresourceFootprint::default(); dst.levels as usize];
+        let mut num_rows = vec![Default::default(); dst.levels as usize];
+        let mut row_sizes = vec![Default::default(); dst.levels as usize];
+
+        let total_size = device.gpu.get_copyable_footprints(
+            &desc,
+            0..dst.levels,
+            0,
+            &mut footprints,
+            &mut num_rows,
+            &mut row_sizes,
+        );
+
+        for i in 0..(dst.levels as usize) {
+            let src_copy = dx::TextureCopyLocation::placed_footprint(&src.res.res, footprints[i]);
+            let dst_copy = dx::TextureCopyLocation::subresource(&dst.res.res, i);
+
+            self.list
+                .copy_texture_region(&dst_copy, 0, 0, 0, &src_copy, None);
+        }
+    }
+
+    pub fn copy_buffer_to_buffer(&self, dst: &Buffer, src: &Buffer) {
+        self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 }
