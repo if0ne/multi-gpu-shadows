@@ -1,4 +1,4 @@
-use std::{cell::RefCell, num::NonZero, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc};
 
 use oxidx::dx::{
     self, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4,
@@ -536,5 +536,121 @@ impl Swapchain {
         self.swapchain
             .present(interval, dx::PresentFlags::empty())
             .expect("Failed to present");
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BindingEntry {
+    Constants(usize),
+    Cbv,
+    Uav,
+    Srv,
+    Sampler,
+}
+
+impl BindingEntry {
+    pub(crate) fn as_dx(&self) -> dx::DescriptorRangeType {
+        match self {
+            BindingEntry::Constants(_) => unreachable!(),
+            BindingEntry::Cbv => dx::DescriptorRangeType::Cbv,
+            BindingEntry::Uav => dx::DescriptorRangeType::Uav,
+            BindingEntry::Srv => dx::DescriptorRangeType::Srv,
+            BindingEntry::Sampler => dx::DescriptorRangeType::Sampler,
+        }
+    }
+}
+
+pub struct RootSignature {
+    pub root: dx::RootSignature,
+}
+
+impl RootSignature {
+    pub fn new(device: &Device, entries: &[BindingEntry], bindless: bool) -> Self {
+        let mut parameters = vec![];
+        let mut ranges = vec![];
+
+        for (i, entry) in entries.iter().enumerate() {
+            ranges.push(
+                dx::DescriptorRange::new(entry.as_dx(), 1)
+                    .with_base_shader_register(i)
+                    .with_register_space(0),
+            );
+        }
+
+        for (i, entry) in entries.iter().enumerate() {
+            let parameter = if let BindingEntry::Constants(size) = entry {
+                dx::RootParameter::constant_32bit(i, 0, *size / 4)
+            } else {
+                dx::RootParameter::descriptor_table(&[ranges[i]])
+                    .with_visibility(dx::ShaderVisibility::All)
+            };
+            parameters.push(parameter);
+        }
+
+        let flags = if bindless {
+            dx::RootSignatureFlags::AllowInputAssemblerInputLayout
+                | dx::RootSignatureFlags::CbvSrvUavHeapDirectlyIndexed
+                | dx::RootSignatureFlags::SamplerHeapDirectlyIndexed
+        } else {
+            dx::RootSignatureFlags::AllowInputAssemblerInputLayout
+        };
+
+        let desc = dx::RootSignatureDesc::default()
+            .with_parameters(&parameters)
+            .with_flags(flags);
+
+        let root = device
+            .gpu
+            .serialize_and_create_root_signature(&desc, dx::RootSignatureVersion::V1_0, 0)
+            .expect("Failed to create root signature");
+
+        Self { root }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DepthOp {
+    None,
+    Less,
+}
+
+impl DepthOp {
+    pub(crate) fn as_dx(&self) -> dx::ComparisonFunc {
+        match self {
+            DepthOp::None => dx::ComparisonFunc::Never,
+            DepthOp::Less => dx::ComparisonFunc::Less,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ShaderType {
+    Vertex,
+    Pixel,
+}
+
+pub struct CompiledShader {
+    pub bytes: Vec<u8>,
+}
+
+pub struct PipelineDesc {
+    pub line: bool,
+    pub depth: bool,
+    pub depth_format: dx::Format,
+    pub op: DepthOp,
+    pub wireframe: bool,
+    pub signature: Option<Rc<RootSignature>>,
+    pub formats: Vec<dx::Format>,
+    pub shaders: HashMap<ShaderType, CompiledShader>,
+}
+
+pub struct GraphicsPipeline {
+    pub pso: dx::PipelineState,
+    pub root_signature: Option<Rc<RootSignature>>,
+}
+
+impl GraphicsPipeline {
+    pub fn new(device: &Device, desc: &PipelineDesc) -> Self {
+        todo!()
     }
 }
