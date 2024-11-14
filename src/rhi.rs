@@ -1,9 +1,11 @@
-use std::{cell::RefCell, collections::HashMap, num::NonZero, ops::Range, rc::Rc};
+use std::{
+    cell::RefCell, collections::HashMap, ffi::CString, num::NonZero, ops::Range, path::Path, rc::Rc,
+};
 
-use gltf::buffer;
 use oxidx::dx::{
-    self, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice,
-    IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, ISwapchain1, PSO_NONE,
+    self, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap,
+    IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, IShaderReflection,
+    ISwapchain1, PSO_NONE, RES_NONE,
 };
 
 use crate::utils::new_uuid;
@@ -572,18 +574,16 @@ impl RootSignature {
         let mut ranges = vec![];
 
         for (i, entry) in entries.iter().enumerate() {
-            ranges.push(
-                dx::DescriptorRange::new(entry.as_dx(), 1)
-                    .with_base_shader_register(i)
-                    .with_register_space(0),
-            );
+            ranges.push([dx::DescriptorRange::new(entry.as_dx(), 1)
+                .with_base_shader_register(i as u32)
+                .with_register_space(0)]);
         }
 
         for (i, entry) in entries.iter().enumerate() {
             let parameter = if let BindingEntry::Constants(size) = entry {
-                dx::RootParameter::constant_32bit(i, 0, *size / 4)
+                dx::RootParameter::constant_32bit(i as u32, 0, (*size / 4) as u32)
             } else {
-                dx::RootParameter::descriptor_table(&[ranges[i]])
+                dx::RootParameter::descriptor_table(&ranges[i])
                     .with_visibility(dx::ShaderVisibility::All)
             };
             parameters.push(parameter);
@@ -625,14 +625,29 @@ impl DepthOp {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderType {
     Vertex,
     Pixel,
 }
 
 pub struct CompiledShader {
-    pub bytes: Vec<u8>,
+    pub ty: ShaderType,
+    pub raw: dx::Blob,
+}
+
+impl CompiledShader {
+    pub fn compile(path: impl AsRef<Path>, ty: ShaderType) -> Self {
+        let target = match ty {
+            ShaderType::Vertex => c"vs_5_0",
+            ShaderType::Pixel => c"ps_5_0",
+        };
+
+        let raw = dx::Blob::compile_from_file(path, &[], c"Main", target, 0, 0)
+            .expect("Failed to compile a shader");
+
+        Self { ty, raw }
+    }
 }
 
 pub struct PipelineDesc {
@@ -653,7 +668,135 @@ pub struct GraphicsPipeline {
 
 impl GraphicsPipeline {
     pub fn new(device: &Device, desc: &PipelineDesc) -> Self {
-        todo!()
+        let vert = desc
+            .shaders
+            .get(&ShaderType::Vertex)
+            .expect("Not found vertex shader");
+        let pixel = desc.shaders.get(&ShaderType::Pixel);
+
+        let vert_reflection = vert.raw.reflect().expect("Failed to get reflection");
+        let vertex_desc = vert_reflection
+            .get_desc()
+            .expect("Failed to get shader reflection");
+
+        let n = vertex_desc.get_input_parameters();
+        let mut input_element_desc = vec![];
+        let mut input_sematics_name = vec![CString::new("\0").unwrap(); n as usize];
+
+        for i in 0..n {
+            let param_desc = vert_reflection
+                .get_input_parameter_desc(i as usize)
+                .expect("Failed fetch input parameter desc");
+
+            input_sematics_name[i as usize] = param_desc.semantic_name().to_owned();
+
+            let format = if param_desc.mask() == 1 {
+                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
+                    dx::Format::R32Uint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
+                    dx::Format::R32Sint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
+                    dx::Format::R32Float
+                } else {
+                    dx::Format::Unknown
+                }
+            } else if param_desc.mask() <= 3 {
+                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
+                    dx::Format::Rg32Uint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
+                    dx::Format::Rg32Sint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
+                    dx::Format::Rg32Float
+                } else {
+                    dx::Format::Unknown
+                }
+            } else if param_desc.mask() <= 7 {
+                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
+                    dx::Format::Rgb32Uint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
+                    dx::Format::Rgb32Sint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
+                    dx::Format::Rgb32Float
+                } else {
+                    dx::Format::Unknown
+                }
+            } else if param_desc.mask() <= 15 {
+                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
+                    dx::Format::Rgba32Uint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
+                    dx::Format::Rgba32Sint
+                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
+                    dx::Format::Rgba32Float
+                } else {
+                    dx::Format::Unknown
+                }
+            } else {
+                dx::Format::Unknown
+            };
+
+            let input_element = dx::InputElementDesc::from_raw_per_vertex(
+                &input_sematics_name[i as usize],
+                param_desc.semantic_index(),
+                format,
+                0,
+            );
+
+            input_element_desc.push(input_element);
+        }
+
+        let de = dx::GraphicsPipelineDesc::new(&vert.raw)
+            .with_input_layout(&input_element_desc)
+            .with_blend_desc(
+                dx::BlendDesc::default().with_render_targets(
+                    desc.formats
+                        .iter()
+                        .map(|_| dx::RenderTargetBlendDesc::default()),
+                ),
+            )
+            .with_render_targets(desc.formats.clone())
+            .with_rasterizer_state(dx::RasterizerDesc::default().with_fill_mode(
+                if desc.wireframe {
+                    dx::FillMode::Wireframe
+                } else {
+                    dx::FillMode::Solid
+                },
+            ))
+            .with_primitive_topology(if desc.line {
+                dx::PipelinePrimitiveTopology::Line
+            } else {
+                dx::PipelinePrimitiveTopology::Triangle
+            });
+
+        let de = if desc.depth {
+            de.with_depth_stencil(
+                dx::DepthStencilDesc::default().enable_depth(desc.op.as_dx()),
+                desc.depth_format,
+            )
+        } else {
+            de
+        };
+
+        let (de, rs) = if let Some(rs) = &desc.signature {
+            (de.with_root_signature(&rs.root), Some(Rc::clone(rs)))
+        } else {
+            (de, None)
+        };
+
+        let de = if let Some(ps) = pixel {
+            de.with_ps(&ps.raw)
+        } else {
+            de
+        };
+
+        let pso = device
+            .gpu
+            .create_graphics_pipeline(&de)
+            .expect("Failed to create pipeline state");
+
+        Self {
+            pso,
+            root_signature: rs,
+        }
     }
 }
 
@@ -779,7 +922,7 @@ impl Buffer {
         );
         device
             .gpu
-            .create_unordered_access_view(Some(&self.res.res), None, Some(&desc), d.cpu);
+            .create_unordered_access_view(Some(&self.res.res), RES_NONE, Some(&desc), d.cpu);
 
         self.uav = Some(d);
     }
@@ -1001,13 +1144,7 @@ impl CommandBuffer {
         {
             dx::ResourceBarrier::uav(&texture.res.res)
         } else {
-            dx::ResourceBarrier::transition(&texture.res.res, *old_state, state, None)
-        };
-
-        let barrier = if let Some(mip) = mip {
-            barrier.with_subresource(mip)
-        } else {
-            barrier
+            dx::ResourceBarrier::transition(&texture.res.res, *old_state, state, mip)
         };
 
         self.list.resource_barrier(&[barrier]);
@@ -1042,23 +1179,24 @@ impl CommandBuffer {
 
     pub fn set_graphics_srv(&self, view: &TextureView, index: usize) {
         self.list
-            .set_graphics_root_descriptor_table(index, view.handle.gpu);
+            .set_graphics_root_descriptor_table(index as u32, view.handle.gpu);
     }
 
     pub fn set_graphics_cbv(&self, buffer: &Buffer, index: usize) {
         self.list.set_graphics_root_descriptor_table(
-            index,
-            buffer.cbv.expect("Expected constant buffer").gpu,
+            index as u32,
+            buffer.cbv.as_ref().expect("Expected constant buffer").gpu,
         );
     }
 
     pub fn set_graphics_sampler(&self, sampler: &Sampler, index: usize) {
         self.list
-            .set_graphics_root_descriptor_table(index, sampler.handle.gpu);
+            .set_graphics_root_descriptor_table(index as u32, sampler.handle.gpu);
     }
 
     pub fn set_graphics_push_constants<T: Copy>(&self, data: &[T], index: usize) {
-        self.list.set_graphics_root_32bit_constants(index, data, 0);
+        self.list
+            .set_graphics_root_32bit_constants(index as u32, data, 0);
     }
 
     pub fn set_viewport(&self, width: u32, height: u32) {
@@ -1098,7 +1236,7 @@ impl CommandBuffer {
 
         for i in 0..(dst.levels as usize) {
             let src_copy = dx::TextureCopyLocation::placed_footprint(&src.res.res, footprints[i]);
-            let dst_copy = dx::TextureCopyLocation::subresource(&dst.res.res, i);
+            let dst_copy = dx::TextureCopyLocation::subresource(&dst.res.res, i as u32);
 
             self.list
                 .copy_texture_region(&dst_copy, 0, 0, 0, &src_copy, None);
