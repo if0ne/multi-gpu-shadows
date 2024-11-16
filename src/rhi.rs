@@ -3,9 +3,7 @@ use std::{
 };
 
 use oxidx::dx::{
-    self, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap,
-    IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, IShaderReflection,
-    ISwapchain1, PSO_NONE, RES_NONE,
+    self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE
 };
 
 use crate::utils::new_uuid;
@@ -32,10 +30,6 @@ impl Device {
         };
 
         let factory = dx::create_factory4(flags).expect("Failed to create DXGI factory");
-        let adapter = Self::get_adapter(&factory, true);
-
-        let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
-            .expect("Failed to create device");
 
         let debug = if use_debug {
             let debug: dx::Debug1 = dx::create_debug()
@@ -54,11 +48,16 @@ impl Device {
             None
         };
 
-        let rtv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Rtv, 2048);
-        let dsv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Dsv, 2048);
+        let adapter = Self::get_adapter(&factory, true);
+
+        let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
+            .expect("Failed to create device");
+
+        let rtv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Rtv, 128);
+        let dsv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Dsv, 128);
         let shader_heap =
-            DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1_000_000);
-        let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 1024);
+            DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
+        let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 32);
 
         Self {
             factory,
@@ -246,6 +245,15 @@ impl CommandQueue {
             .signal(&fence.fence, *guard)
             .expect("Failed to signal");
         *guard
+    }
+
+    pub fn submit(&self, buffers: &[&CommandBuffer]) {
+        let lists = buffers
+            .iter()
+            .map(|b| Some(b.list.clone()))
+            .collect::<Vec<_>>();
+
+        self.queue.execute_command_lists(&lists);
     }
 }
 
