@@ -102,10 +102,21 @@ impl Model {
 
         let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
-        let positions = reader.read_positions().unwrap();
-        let uvs = reader.read_tex_coords(0).unwrap();
-        let normals = reader.read_normals().unwrap();
-        let tangets = reader.read_tangents().unwrap();
+        let Some(positions) = reader.read_positions() else {
+            return;
+        };
+
+        let Some(uvs) = reader.read_tex_coords(0) else {
+            return;
+        };
+
+        let Some(normals) = reader.read_normals() else {
+            return;
+        };
+
+        let Some(tangets) = reader.read_tangents() else {
+            return;
+        };
 
         let vertices = positions
             .zip(uvs.into_f32())
