@@ -15,5 +15,11 @@ fn main() {
 
     let gpu_tracker = rhi::GpuResourceTracker::new(&device);
 
-    let model = Model::load(&device, &gpu_tracker, &queue, &fence, "./assets/fantasy_island/scene.gltf");
+    let model = Model::load(
+        &device,
+        &gpu_tracker,
+        &queue,
+        &fence,
+        "./assets/fantasy_island/scene.gltf",
+    );
 }

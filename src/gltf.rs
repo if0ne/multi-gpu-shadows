@@ -16,13 +16,14 @@ pub struct Vertex {
     pub pos: glam::Vec3,
     pub uv: glam::Vec2,
     pub normals: glam::Vec3,
-    pub tangent: glam::Vec3,
 }
 
+#[derive(Debug)]
 pub struct Material {
     pub albedo: Option<rhi::Texture>,
 }
 
+#[derive(Debug)]
 pub struct Primitive {
     pub vertex_buffer: rhi::Buffer,
     pub index_buffer: rhi::Buffer,
@@ -32,6 +33,7 @@ pub struct Primitive {
     pub mat_index: Option<usize>,
 }
 
+#[derive(Debug)]
 pub struct Node {
     pub primitives: Vec<Primitive>,
     pub model_buffer: [rhi::Buffer; FRAMES_IN_FLIGHT],
@@ -42,6 +44,7 @@ pub struct Node {
     pub children: Vec<Rc<RefCell<Node>>>,
 }
 
+#[derive(Debug)]
 pub struct Model {
     pub path: PathBuf,
     pub directory: PathBuf,
@@ -56,7 +59,9 @@ impl Model {
         node: &gltf::Node,
         parent: Rc<RefCell<Node>>,
         tracker: &rhi::GpuResourceTracker,
-        buffers: &[gltf::buffer::Data]
+        buffers: &[gltf::buffer::Data],
+        staging_buffers: &mut Vec<rhi::Buffer>,
+        cmd_buffer: &rhi::CommandBuffer,
     ) {
         let transform = Self::compute_transform(node);
         let new_node = Rc::new(RefCell::new(Node {
@@ -81,12 +86,26 @@ impl Model {
 
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
-                Self::process_primitive(tracker, &primitive, &mut new_node.borrow_mut(), buffers);
+                Self::process_primitive(
+                    tracker,
+                    &primitive,
+                    &mut new_node.borrow_mut(),
+                    buffers,
+                    staging_buffers,
+                    cmd_buffer,
+                );
             }
         }
 
         for child in node.children() {
-            Self::process_node(&child, new_node.clone(), tracker, buffers);
+            Self::process_node(
+                &child,
+                new_node.clone(),
+                tracker,
+                buffers,
+                staging_buffers,
+                cmd_buffer,
+            );
         }
     }
 
@@ -94,7 +113,9 @@ impl Model {
         tracker: &rhi::GpuResourceTracker,
         primitive: &gltf::Primitive,
         node: &mut Node,
-        buffers: &[gltf::buffer::Data]
+        buffers: &[gltf::buffer::Data],
+        staging_buffers: &mut Vec<rhi::Buffer>,
+        cmd_buffer: &rhi::CommandBuffer,
     ) {
         if primitive.mode() != gltf::mesh::Mode::Triangles {
             return;
@@ -114,27 +135,52 @@ impl Model {
             return;
         };
 
-        let Some(tangets) = reader.read_tangents() else {
+        let Some(indecies) = reader.read_indices() else {
             return;
         };
 
         let vertices = positions
             .zip(uvs.into_f32())
             .zip(normals)
-            .zip(tangets)
-            .map(|(((pos, uv), normals), tangets)| {
-                let [x, y, z, ..] = tangets;
-                Vertex {
-                    pos: glam::Vec3::from_array(pos),
-                    uv: glam::Vec2::from_array(uv),
-                    normals: glam::Vec3::from_array(normals),
-                    tangent: glam::Vec3::from_array([x, y, z]),
-                }
+            .map(|((pos, uv), normals)| Vertex {
+                pos: glam::Vec3::from_array(pos),
+                uv: glam::Vec2::from_array(uv),
+                normals: glam::Vec3::from_array(normals),
             })
             .collect::<Vec<_>>();
 
         let vertex_count = vertices.len();
-        let index_count = primitive.indices().unwrap().count();
+        let indecies = indecies.into_u32().collect::<Vec<_>>();
+
+        let index_count = indecies.len();
+
+        let mut vertex_staging = rhi::Buffer::new(
+            tracker,
+            vertex_count * std::mem::size_of::<Vertex>(),
+            std::mem::size_of::<Vertex>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Vertex Buffer", node.name),
+        );
+
+        {
+            let map = vertex_staging.map::<Vertex>(None);
+            map.pointer.clone_from_slice(&vertices);
+        }
+
+        let mut index_staging = rhi::Buffer::new(
+            tracker,
+            index_count * std::mem::size_of::<u32>(),
+            std::mem::size_of::<u32>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Index Buffer", node.name),
+        );
+
+        {
+            let map = index_staging.map::<u32>(None);
+            map.pointer.clone_from_slice(&indecies);
+        }
 
         let vertex_buffer = rhi::Buffer::new(
             tracker,
@@ -153,6 +199,12 @@ impl Model {
             false,
             format!("{} Index Buffer", node.name),
         );
+
+        cmd_buffer.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
+        cmd_buffer.copy_buffer_to_buffer(&index_buffer, &index_staging);
+
+        staging_buffers.push(vertex_staging);
+        staging_buffers.push(index_staging);
 
         node.primitives.push(Primitive {
             vertex_buffer,
@@ -177,6 +229,8 @@ impl Model {
 
         let scene = gltf.scenes().next().expect("No gltf scenes");
 
+        let mut staging_buffers = vec![];
+
         let root = Rc::new(RefCell::new(Node {
             primitives: vec![],
             model_buffer: std::array::from_fn(|_| {
@@ -196,7 +250,14 @@ impl Model {
         }));
 
         for node in scene.nodes() {
-            Self::process_node(&node, root.clone(), tracker, &buffers);
+            Self::process_node(
+                &node,
+                root.clone(),
+                tracker,
+                &buffers,
+                &mut staging_buffers,
+                &cmd_buffer,
+            );
         }
 
         cmd_buffer.end();

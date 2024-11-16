@@ -3,7 +3,9 @@ use std::{
 };
 
 use oxidx::dx::{
-    self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt, IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource, IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE
+    self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
+    IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource,
+    IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE,
 };
 
 use crate::utils::new_uuid;
@@ -55,8 +57,7 @@ impl Device {
 
         let rtv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Rtv, 128);
         let dsv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Dsv, 128);
-        let shader_heap =
-            DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
+        let shader_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
         let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 32);
 
         Self {
@@ -102,6 +103,7 @@ impl Device {
     }
 }
 
+#[derive(Debug)]
 pub struct DescriptorHeap {
     pub heap: dx::DescriptorHeap,
     pub ty: dx::DescriptorHeapType,
@@ -169,6 +171,7 @@ impl DescriptorHeap {
     }
 }
 
+#[derive(Debug)]
 pub struct Descriptor {
     pub heap_index: usize,
     pub cpu: dx::CpuDescriptorHandle,
@@ -257,6 +260,7 @@ impl CommandQueue {
     }
 }
 
+#[derive(Debug)]
 pub struct GpuResource {
     pub res: dx::Resource,
     pub name: String,
@@ -313,6 +317,7 @@ impl GpuResourceTracker {
     }
 }
 
+#[derive(Debug)]
 pub struct Texture {
     pub res: Rc<GpuResource>,
     pub uuid: u64,
@@ -817,6 +822,7 @@ pub enum BufferType {
     Copy,
 }
 
+#[derive(Debug)]
 pub struct Buffer {
     pub res: Rc<GpuResource>,
     pub ty: BufferType,
@@ -854,7 +860,7 @@ impl Buffer {
         };
 
         let state = match ty {
-            BufferType::Constant => dx::ResourceStates::GenericRead,
+            BufferType::Copy | BufferType::Constant => dx::ResourceStates::GenericRead,
             _ => dx::ResourceStates::Common,
         };
 
@@ -882,7 +888,7 @@ impl Buffer {
             Some(dx::IndexBufferView::new(
                 res.res.get_gpu_virtual_address(),
                 size,
-                dx::Format::R16Uint,
+                dx::Format::R32Uint,
             ))
         } else {
             None
@@ -958,7 +964,7 @@ impl Buffer {
         let size = if let Some(ref r) = range {
             r.end - r.start
         } else {
-            self.size
+            self.size / size_of::<T>()
         };
 
         let pointer = self
