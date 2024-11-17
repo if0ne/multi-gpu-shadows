@@ -767,13 +767,15 @@ impl GraphicsPipeline {
                 ),
             )
             .with_render_targets(desc.formats.clone())
-            .with_rasterizer_state(dx::RasterizerDesc::default().with_fill_mode(
-                if desc.wireframe {
-                    dx::FillMode::Wireframe
-                } else {
-                    dx::FillMode::Solid
-                },
-            ))
+            .with_rasterizer_state(
+                dx::RasterizerDesc::default()
+                    .with_fill_mode(if desc.wireframe {
+                        dx::FillMode::Wireframe
+                    } else {
+                        dx::FillMode::Solid
+                    })
+                    .with_cull_mode(dx::CullMode::None),
+            )
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
             } else {

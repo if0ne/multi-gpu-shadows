@@ -1,7 +1,8 @@
 use std::{collections::HashMap, num::NonZero, rc::Rc};
 
 use camera::{Camera, FpsController, GpuCamera};
-use gltf::{Model, Node};
+use glam::{vec2, vec3};
+use gltf::{Model, Node, Vertex};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use winit::{
@@ -43,6 +44,12 @@ pub struct Application {
     pub camera_controller: FpsController,
 
     pub pso: rhi::GraphicsPipeline,
+
+    pub vertex_buffer: rhi::Buffer,
+    pub vertex_staging: rhi::Buffer,
+
+    pub index_buffer: rhi::Buffer,
+    pub index_staging: rhi::Buffer,
 }
 
 impl Application {
@@ -61,6 +68,82 @@ impl Application {
             &fence,
             "./assets/fantasy_island/scene.gltf",
         );
+
+        let cmd_list = rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, false);
+
+        let vertices = vec![
+            Vertex {
+                pos: vec3(-0.5, -0.5, 0.0),
+                normals: vec3(0.0, 0.0, -1.0),
+                uv: vec2(0.0, 1.0),
+            },
+            Vertex {
+                pos: vec3(0.0, 0.5, 0.0),
+                normals: vec3(0.0, 0.0, -1.0),
+                uv: vec2(0.0, 0.0),
+            },
+            Vertex {
+                pos: vec3(0.5, -0.5, 0.0),
+                normals: vec3(0.0, 0.0, -1.0),
+                uv: vec2(1.0, 0.0),
+            },
+        ];
+
+        let indices = vec![0u32, 1, 2];
+
+        let mut vertex_staging = rhi::Buffer::new(
+            &tracker,
+            vertices.len() * std::mem::size_of::<Vertex>(),
+            std::mem::size_of::<Vertex>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Vertex Buffer", "Check"),
+        );
+
+        {
+            let map = vertex_staging.map::<Vertex>(None);
+            map.pointer.clone_from_slice(&vertices);
+        }
+
+        let mut index_staging = rhi::Buffer::new(
+            &tracker,
+            indices.len() * std::mem::size_of::<u32>(),
+            std::mem::size_of::<u32>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Index Buffer", "check"),
+        );
+
+        {
+            let map = index_staging.map::<u32>(None);
+            map.pointer.clone_from_slice(&indices);
+        }
+
+        let vertex_buffer = rhi::Buffer::new(
+            &tracker,
+            vertices.len() * std::mem::size_of::<Vertex>(),
+            std::mem::size_of::<Vertex>(),
+            rhi::BufferType::Vertex,
+            false,
+            format!("{} Vertex Buffer", "Check"),
+        );
+
+        let index_buffer = rhi::Buffer::new(
+            &tracker,
+            indices.len() * std::mem::size_of::<u32>(),
+            std::mem::size_of::<u32>(),
+            rhi::BufferType::Index,
+            false,
+            format!("{} Index Buffer", "Check"),
+        );
+
+        cmd_list.begin(&device, false);
+        cmd_list.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
+        cmd_list.end();
+        cmd_queue.submit(&[&cmd_list]);
+        let v = cmd_queue.signal(&fence);
+        cmd_queue.wait(&fence, v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -92,7 +175,7 @@ impl Application {
             rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, true)
         });
 
-        let fence_values = std::array::from_fn(|_| 0);
+        let fence_values = std::array::from_fn(|_| v);
 
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
@@ -132,6 +215,10 @@ impl Application {
             camera,
             camera_controller: controller,
             pso,
+            vertex_buffer,
+            vertex_staging,
+            index_buffer,
+            index_staging,
         }
     }
 
@@ -143,8 +230,8 @@ impl Application {
         let mapped = buffer.map::<GpuCamera>(None);
 
         mapped.pointer[0] = GpuCamera {
-            world: glam::Mat4::IDENTITY,
-            view: self.camera.view,
+            world: glam::Mat4::from_scale(vec3(0.02, 0.02, 0.02)),
+            view: glam::Mat4::look_at_lh(vec3(0.0, 500.0, -500.0), glam::Vec3::ZERO, glam::Vec3::Y),
             proj: self.camera.proj(),
         };
     }
@@ -173,14 +260,20 @@ impl Application {
 
         list.set_image_barrier(texture, dx::ResourceStates::RenderTarget, None);
         list.clear_render_target(view, 1.0, 0.0, 0.0);
-        list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
+        list.set_render_targets(&[&view], None);
+        list.set_viewport(1280, 720);
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
 
         self.draw_node(list, &*self.model.root.borrow());
+        //list.set_vertex_buffer(&self.vertex_buffer);
+        //list.set_index_buffer(&self.index_buffer);
+        //list.draw(3);
+
+        list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
         list.end();
         self.cmd_queue.submit(&[list]);
