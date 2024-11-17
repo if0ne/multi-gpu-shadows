@@ -1,6 +1,7 @@
-use std::{num::NonZero, rc::Rc};
+use std::{collections::HashMap, num::NonZero, rc::Rc};
 
-use gltf::Model;
+use camera::{Camera, FpsController, GpuCamera};
+use gltf::{Model, Node};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use winit::{
@@ -12,6 +13,7 @@ use winit::{
     window::Window,
 };
 
+mod camera;
 mod gltf;
 mod rhi;
 mod utils;
@@ -30,11 +32,17 @@ pub struct Application {
     pub fence: rhi::Fence,
     pub cmd_lists: [rhi::CommandBuffer; FRAMES_IN_FLIGHT],
     pub fence_values: [u64; FRAMES_IN_FLIGHT],
+    pub camera_buffers: [rhi::Buffer; FRAMES_IN_FLIGHT],
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
 
     pub model: Model,
+
+    pub camera: Camera,
+    pub camera_controller: FpsController,
+
+    pub pso: rhi::GraphicsPipeline,
 }
 
 impl Application {
@@ -54,11 +62,61 @@ impl Application {
             "./assets/fantasy_island/scene.gltf",
         );
 
+        let rs = Rc::new(rhi::RootSignature::new(
+            &device,
+            &[rhi::BindingEntry::Cbv],
+            false,
+        ));
+
+        let vs = rhi::CompiledShader::compile("assets/vert.hlsl", rhi::ShaderType::Vertex);
+        let ps = rhi::CompiledShader::compile("assets/pixel.hlsl", rhi::ShaderType::Pixel);
+
+        let pso = rhi::GraphicsPipeline::new(
+            &device,
+            &rhi::PipelineDesc {
+                line: false,
+                depth: false,
+                depth_format: dx::Format::D24UnormS8Uint,
+                op: rhi::DepthOp::Less,
+                wireframe: false,
+                signature: Some(rs),
+                formats: vec![dx::Format::Rgba8Unorm],
+                shaders: HashMap::from_iter([
+                    (rhi::ShaderType::Vertex, vs),
+                    (rhi::ShaderType::Pixel, ps),
+                ]),
+            },
+        );
+
         let cmd_lists = std::array::from_fn(|_| {
             rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, true)
         });
 
         let fence_values = std::array::from_fn(|_| 0);
+
+        let camera = Camera {
+            view: glam::Mat4::IDENTITY,
+            far: 1000.0,
+            near: 0.1,
+            fov: 45.0f32.to_radians(),
+            aspect_ratio: 16.0 / 9.0,
+        };
+
+        let controller = FpsController::new(1.0, 1.0);
+
+        let camera_buffers = std::array::from_fn(|_| {
+            let mut buffer = rhi::Buffer::new(
+                &tracker,
+                size_of::<GpuCamera>(),
+                0,
+                rhi::BufferType::Constant,
+                false,
+                "Camera buffer",
+            );
+            buffer.build_constant(&device);
+
+            buffer
+        });
 
         Self {
             device,
@@ -67,9 +125,39 @@ impl Application {
             fence,
             cmd_lists,
             fence_values,
+            camera_buffers,
             wnd_ctx: None,
             model,
             curr_frame: 0,
+            camera,
+            camera_controller: controller,
+            pso,
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.camera_controller
+            .update_position(0.0, &mut self.camera, glam::Vec3::Z);
+
+        let buffer = &mut self.camera_buffers[self.curr_frame];
+        let mapped = buffer.map::<GpuCamera>(None);
+
+        mapped.pointer[0] = GpuCamera {
+            world: glam::Mat4::IDENTITY,
+            view: self.camera.view,
+            proj: self.camera.proj(),
+        };
+    }
+
+    fn draw_node(&self, cmd_list: &rhi::CommandBuffer, node: &Node) {
+        for prim in &node.primitives {
+            cmd_list.set_vertex_buffer(&prim.vertex_buffer);
+            cmd_list.set_index_buffer(&prim.index_buffer);
+            cmd_list.draw(prim.vtx_count);
+        }
+
+        for node in &node.children {
+            self.draw_node(cmd_list, &*node.borrow());
         }
     }
 
@@ -87,11 +175,17 @@ impl Application {
         list.clear_render_target(view, 1.0, 0.0, 0.0);
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
+        list.set_graphics_pipeline(&self.pso);
+        list.set_topology(rhi::GeomTopology::Triangles);
+
+        list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
+
+        self.draw_node(list, &*self.model.root.borrow());
+
         list.end();
         self.cmd_queue.submit(&[list]);
         self.fence_values[self.curr_frame] = self.cmd_queue.signal(&self.fence);
         ctx.swapchain.present(true);
-
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.cmd_queue
             .wait(&self.fence, self.fence_values[self.curr_frame]);
@@ -196,6 +290,7 @@ impl ApplicationHandler for Application {
                 self.base.calculate_frame_stats();
                 self.sample.update(&self.base);
                 self.sample.render(&mut self.base);*/
+                self.update();
                 self.render();
             }
             WindowEvent::CloseRequested => event_loop.exit(),

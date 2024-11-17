@@ -694,7 +694,7 @@ impl GraphicsPipeline {
 
         let n = vertex_desc.get_input_parameters();
         let mut input_element_desc = vec![];
-        let mut input_sematics_name = vec![CString::new("\0").unwrap(); n as usize];
+        let mut input_sematics_name = vec![CString::new("").unwrap(); n as usize];
 
         for i in 0..n {
             let param_desc = vert_reflection

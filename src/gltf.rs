@@ -5,7 +5,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use gltf::Gltf;
 use oxidx::dx;
 
 use crate::rhi::{self, FRAMES_IN_FLIGHT};
@@ -14,8 +13,8 @@ use crate::rhi::{self, FRAMES_IN_FLIGHT};
 #[repr(C)]
 pub struct Vertex {
     pub pos: glam::Vec3,
-    pub uv: glam::Vec2,
     pub normals: glam::Vec3,
+    pub uv: glam::Vec2,
 }
 
 #[derive(Debug)]
