@@ -10,6 +10,7 @@ use winit::{
     dpi::PhysicalSize,
     event::{DeviceEvent, DeviceId, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::Window,
 };
@@ -50,10 +51,13 @@ pub struct Application {
 
     pub index_buffer: rhi::Buffer,
     pub index_staging: rhi::Buffer,
+
+    pub window_width: u32,
+    pub window_height: u32,
 }
 
 impl Application {
-    pub fn new() -> Self {
+    pub fn new(width: u32, height: u32) -> Self {
         let device = Rc::new(rhi::Device::new(true));
 
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
@@ -181,11 +185,11 @@ impl Application {
             view: glam::Mat4::IDENTITY,
             far: 1000.0,
             near: 0.1,
-            fov: 45.0f32.to_radians(),
-            aspect_ratio: 16.0 / 9.0,
+            fov: 90.0f32.to_radians(),
+            aspect_ratio: width as f32 / height as f32,
         };
 
-        let controller = FpsController::new(1.0, 1.0);
+        let controller = FpsController::new(0.003, 1.0);
 
         let camera_buffers = std::array::from_fn(|_| {
             let mut buffer = rhi::Buffer::new(
@@ -219,19 +223,18 @@ impl Application {
             vertex_staging,
             index_buffer,
             index_staging,
+            window_width: width,
+            window_height: height,
         }
     }
 
     pub fn update(&mut self) {
-        self.camera_controller
-            .update_position(0.0, &mut self.camera, glam::Vec3::Z);
-
         let buffer = &mut self.camera_buffers[self.curr_frame];
         let mapped = buffer.map::<GpuCamera>(None);
 
         mapped.pointer[0] = GpuCamera {
-            world: glam::Mat4::from_scale(vec3(0.5, 0.5, 0.5)),
-            view: glam::Mat4::look_at_lh(vec3(0.0, 500.0, -500.0), glam::Vec3::ZERO, glam::Vec3::Y),
+            world: glam::Mat4::from_translation(vec3(0.0, 0.0, 1.0)),
+            view: self.camera.view,
             proj: self.camera.proj(),
         };
     }
@@ -262,16 +265,16 @@ impl Application {
         list.clear_render_target(view, 1.0, 0.0, 0.0);
 
         list.set_render_targets(&[&view], None);
-        list.set_viewport(1280, 720);
+        list.set_viewport(self.window_width, self.window_height);
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
 
-        self.draw_node(list, &*self.model.root.borrow());
-        //list.set_vertex_buffer(&self.vertex_buffer);
-        //list.set_index_buffer(&self.index_buffer);
-        //list.draw(3);
+        //self.draw_node(list, &*self.model.root.borrow());
+        list.set_vertex_buffer(&self.vertex_buffer);
+        list.set_index_buffer(&self.index_buffer);
+        list.draw(3);
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
@@ -289,10 +292,14 @@ impl Application {
             unreachable!()
         };
         let hwnd = hwnd.hwnd;
-        let size = window.inner_size();
 
-        let swapchain =
-            rhi::Swapchain::new(&self.device, &self.cmd_queue, size.width, size.height, hwnd);
+        let swapchain = rhi::Swapchain::new(
+            &self.device,
+            &self.cmd_queue,
+            self.window_width,
+            self.window_height,
+            hwnd,
+        );
 
         self.wnd_ctx = Some(WindowContext {
             window,
@@ -340,6 +347,38 @@ impl ApplicationHandler for Application {
                     /*if let PhysicalKey::Code(code) = event.physical_key {
                         self.sample.on_key_down(&self.base, code, event.repeat);
                     }*/
+
+                    if let PhysicalKey::Code(KeyCode::KeyW) = event.physical_key {
+                        self.camera_controller.update_position(
+                            0.16,
+                            &mut self.camera,
+                            glam::Vec3::Z,
+                        );
+                    }
+
+                    if let PhysicalKey::Code(KeyCode::KeyS) = event.physical_key {
+                        self.camera_controller.update_position(
+                            0.16,
+                            &mut self.camera,
+                            glam::Vec3::NEG_Z,
+                        );
+                    }
+
+                    if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
+                        self.camera_controller.update_position(
+                            0.16,
+                            &mut self.camera,
+                            glam::Vec3::X,
+                        );
+                    }
+
+                    if let PhysicalKey::Code(KeyCode::KeyA) = event.physical_key {
+                        self.camera_controller.update_position(
+                            0.16,
+                            &mut self.camera,
+                            glam::Vec3::NEG_X,
+                        );
+                    }
                 }
                 winit::event::ElementState::Released => {
                     /*if event.physical_key == PhysicalKey::Code(KeyCode::F2) {
@@ -362,6 +401,16 @@ impl ApplicationHandler for Application {
                     {}
             },
             WindowEvent::Resized(size) => {
+                let Some(ref mut context) = self.wnd_ctx else {
+                    return;
+                };
+                self.window_width = size.width;
+                self.window_height = size.height;
+
+                /*self.cmd_queue
+                    .wait(&self.fence, *self.fence.value.borrow());
+                context.swapchain.resize(&self.device, size.width, size.height);*/
+
                 /*let Some(ref mut context) = self.base.context else {
                     return;
                 };
@@ -394,7 +443,13 @@ impl ApplicationHandler for Application {
     #[allow(clippy::single_match)]
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
         match event {
-            DeviceEvent::MouseMotion { delta } => { /* */ }
+            DeviceEvent::MouseMotion { delta } => {
+                self.camera_controller.update_yaw_pitch(
+                    &mut self.camera,
+                    delta.0 as f32,
+                    delta.1 as f32,
+                );
+            }
             _ => {}
         }
     }
@@ -411,6 +466,6 @@ fn main() {
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = Application::new();
+    let mut app = Application::new(1280, 720);
     event_loop.run_app(&mut app).unwrap();
 }
