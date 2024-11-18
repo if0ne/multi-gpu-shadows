@@ -23,9 +23,9 @@ PixelInput Main(VertexInput input)
 {
     PixelInput output;
 
-    float4 worldPosition = mul(float4(input.position, 1.0f), worldMatrix);
-    output.position = mul(worldPosition, viewMatrix);
-    output.position = mul(output.position, projectionMatrix);
+    float4 worldPosition = mul(worldMatrix, float4(input.position, 1.0f));
+    output.position = mul(viewMatrix, worldPosition);
+    output.position = mul(projectionMatrix, output.position);
 
     float3 worldNormal = mul(float4(input.normal, 0.0f), worldMatrix).xyz;
     output.normal = normalize(worldNormal);

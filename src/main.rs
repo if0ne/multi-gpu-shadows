@@ -230,7 +230,7 @@ impl Application {
         let mapped = buffer.map::<GpuCamera>(None);
 
         mapped.pointer[0] = GpuCamera {
-            world: glam::Mat4::from_scale(vec3(0.02, 0.02, 0.02)),
+            world: glam::Mat4::from_scale(vec3(0.5, 0.5, 0.5)),
             view: glam::Mat4::look_at_lh(vec3(0.0, 500.0, -500.0), glam::Vec3::ZERO, glam::Vec3::Y),
             proj: self.camera.proj(),
         };
