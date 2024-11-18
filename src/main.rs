@@ -30,6 +30,8 @@ pub struct Application {
     pub device: Rc<rhi::Device>,
     pub tracker: rhi::GpuResourceTracker,
 
+    pub keys: HashMap<PhysicalKey, bool>,
+
     pub cmd_queue: rhi::CommandQueue,
     pub fence: rhi::Fence,
     pub cmd_lists: [rhi::CommandBuffer; FRAMES_IN_FLIGHT],
@@ -225,10 +227,50 @@ impl Application {
             index_staging,
             window_width: width,
             window_height: height,
+            keys: HashMap::new(),
         }
     }
 
     pub fn update(&mut self) {
+        let mut direction = glam::Vec3::ZERO;
+
+        if self
+            .keys
+            .get(&PhysicalKey::Code(KeyCode::KeyW))
+            .is_some_and(|v| *v)
+        {
+            direction.z += 1.0;
+        }
+
+        if self
+            .keys
+            .get(&PhysicalKey::Code(KeyCode::KeyS))
+            .is_some_and(|v| *v)
+        {
+            direction.z -= 1.0;
+        }
+
+        if self
+            .keys
+            .get(&PhysicalKey::Code(KeyCode::KeyD))
+            .is_some_and(|v| *v)
+        {
+            direction.x += 1.0;
+        }
+
+        if self
+            .keys
+            .get(&PhysicalKey::Code(KeyCode::KeyA))
+            .is_some_and(|v| *v)
+        {
+            direction.x -= 1.0;
+        }
+
+        if direction.length() != 0.0 {
+            self.camera_controller
+                .update_position(0.16, &mut self.camera, direction.normalize());
+        }
+
         let buffer = &mut self.camera_buffers[self.curr_frame];
         let mapped = buffer.map::<GpuCamera>(None);
 
@@ -271,7 +313,6 @@ impl Application {
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
 
-        //self.draw_node(list, &*self.model.root.borrow());
         list.set_vertex_buffer(&self.vertex_buffer);
         list.set_index_buffer(&self.index_buffer);
         list.draw(3);
@@ -320,7 +361,7 @@ impl ApplicationHandler for Application {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
             .with_title("Mgpu Sample")
-            .with_inner_size(PhysicalSize::new(1280, 720));
+            .with_inner_size(PhysicalSize::new(self.window_width, self.window_height));
 
         let window = event_loop.create_window(window_attributes).unwrap();
         self.bind_window(window);
@@ -344,52 +385,10 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::KeyboardInput { event, .. } => match event.state {
                 winit::event::ElementState::Pressed => {
-                    /*if let PhysicalKey::Code(code) = event.physical_key {
-                        self.sample.on_key_down(&self.base, code, event.repeat);
-                    }*/
-
-                    if let PhysicalKey::Code(KeyCode::KeyW) = event.physical_key {
-                        self.camera_controller.update_position(
-                            0.16,
-                            &mut self.camera,
-                            glam::Vec3::Z,
-                        );
-                    }
-
-                    if let PhysicalKey::Code(KeyCode::KeyS) = event.physical_key {
-                        self.camera_controller.update_position(
-                            0.16,
-                            &mut self.camera,
-                            glam::Vec3::NEG_Z,
-                        );
-                    }
-
-                    if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
-                        self.camera_controller.update_position(
-                            0.16,
-                            &mut self.camera,
-                            glam::Vec3::X,
-                        );
-                    }
-
-                    if let PhysicalKey::Code(KeyCode::KeyA) = event.physical_key {
-                        self.camera_controller.update_position(
-                            0.16,
-                            &mut self.camera,
-                            glam::Vec3::NEG_X,
-                        );
-                    }
+                    self.keys.insert(event.physical_key, true);
                 }
                 winit::event::ElementState::Released => {
-                    /*if event.physical_key == PhysicalKey::Code(KeyCode::F2) {
-                        self.base.set_msaa_4x_state(!self.base.msaa_state);
-                    } else if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
-                        event_loop.exit()
-                    }
-
-                    if let PhysicalKey::Code(code) = event.physical_key {
-                        self.sample.on_key_up(code);
-                    }*/
+                    self.keys.insert(event.physical_key, false);
                 }
             },
             WindowEvent::MouseInput { state, button, .. } => match state {
