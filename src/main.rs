@@ -4,7 +4,7 @@ use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec2, vec3};
 use gltf::{Model, Node, Vertex};
 use oxidx::dx;
-use rhi::FRAMES_IN_FLIGHT;
+use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -60,7 +60,14 @@ pub struct Application {
 
 impl Application {
     pub fn new(width: u32, height: u32) -> Self {
-        let device = Rc::new(rhi::Device::new(true));
+        let device = Rc::new(
+            rhi::Device::fetch(DeviceSettings {
+                use_debug: true,
+                ty: rhi::AdapterType::Hardware { high_perf: true },
+                excluded_adapters: &[],
+            })
+            .expect("Failed to create device"),
+        );
 
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
         let fence = rhi::Fence::new(&device);

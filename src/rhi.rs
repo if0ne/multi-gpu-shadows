@@ -12,20 +12,34 @@ use crate::utils::new_uuid;
 
 pub const FRAMES_IN_FLIGHT: usize = 3;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceSettings<'a> {
+    pub use_debug: bool,
+    pub ty: AdapterType,
+    pub excluded_adapters: &'a [&'a dx::Adapter3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdapterType {
+    Software,
+    Hardware { high_perf: bool },
+}
+
 pub struct Device {
     pub factory: dx::Factory4,
     pub adapter: dx::Adapter3,
     pub gpu: dx::Device,
     pub debug: Option<dx::Debug1>,
-    pub rtv_heap: Rc<DescriptorHeap>,
-    pub dsv_heap: Rc<DescriptorHeap>,
-    pub shader_heap: Rc<DescriptorHeap>,
-    pub sampler_heap: Rc<DescriptorHeap>,
+
+    pub rtv_heap: DescriptorHeap,
+    pub dsv_heap: DescriptorHeap,
+    pub shader_heap: DescriptorHeap,
+    pub sampler_heap: DescriptorHeap,
 }
 
 impl Device {
-    pub fn new(use_debug: bool) -> Self {
-        let flags = if use_debug {
+    pub fn fetch(settings: DeviceSettings<'_>) -> Option<Self> {
+        let flags = if settings.use_debug {
             dx::FactoryCreationFlags::Debug
         } else {
             dx::FactoryCreationFlags::empty()
@@ -33,11 +47,11 @@ impl Device {
 
         let factory = dx::create_factory4(flags).expect("Failed to create DXGI factory");
 
-        let debug = if use_debug {
+        let debug = if settings.use_debug {
             let debug: dx::Debug1 = dx::create_debug()
                 .expect("Failed to create debug")
                 .try_into()
-                .expect("Faile to fetch debug1");
+                .expect("Failed to fetch debug1");
 
             debug.enable_debug_layer();
             debug.set_enable_gpu_based_validation(true);
@@ -50,7 +64,7 @@ impl Device {
             None
         };
 
-        let adapter = Self::get_adapter(&factory, true);
+        let adapter = Self::get_adapter(&factory, &settings)?;
 
         let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
             .expect("Failed to create device");
@@ -60,19 +74,47 @@ impl Device {
         let shader_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
         let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 32);
 
-        Self {
+        Some(Self {
             factory,
             adapter,
             gpu: device,
             debug,
-            rtv_heap: Rc::new(rtv_heap),
-            dsv_heap: Rc::new(dsv_heap),
-            shader_heap: Rc::new(shader_heap),
-            sampler_heap: Rc::new(sampler_heap),
+            rtv_heap,
+            dsv_heap,
+            shader_heap,
+            sampler_heap,
+        })
+    }
+
+    fn get_adapter(factory: &dx::Factory4, settings: &DeviceSettings) -> Option<dx::Adapter3> {
+        match settings.ty {
+            AdapterType::Software => {
+                Self::get_software_adapter(factory, settings.excluded_adapters)
+            }
+            AdapterType::Hardware { high_perf } => {
+                Self::get_hardware_adapter(factory, high_perf, settings.excluded_adapters)
+            }
         }
     }
 
-    fn get_adapter(factory: &dx::Factory4, high_perf: bool) -> dx::Adapter3 {
+    fn get_software_adapter(
+        factory: &dx::Factory4,
+        excluded: &[&dx::Adapter3],
+    ) -> Option<dx::Adapter3> {
+        let adapter = factory.enum_warp_adapters().ok()?;
+
+        if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
+            return None;
+        }
+
+        Some(adapter)
+    }
+
+    fn get_hardware_adapter(
+        factory: &dx::Factory4,
+        high_perf: bool,
+        excluded: &[&dx::Adapter3],
+    ) -> Option<dx::Adapter3> {
         if let Ok(factory) = TryInto::<dx::Factory7>::try_into(factory.clone()) {
             let mut i = 0;
             let pref = if high_perf {
@@ -82,8 +124,13 @@ impl Device {
             };
 
             while let Ok(adapter) = factory.enum_adapters_by_gpu_preference(i, pref) {
+                if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
+                    i += 1;
+                    continue;
+                }
+
                 if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
-                    return adapter;
+                    return Some(adapter);
                 }
 
                 i += 1;
@@ -92,14 +139,37 @@ impl Device {
 
         let mut i = 0;
         while let Ok(adapter) = factory.enum_adapters(i) {
+            if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
+                i += 1;
+                continue;
+            }
+
             if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
-                return adapter;
+                return Some(adapter);
             }
 
             i += 1;
         }
 
-        panic!("Failed to fetch adapter")
+        None
+    }
+
+    fn is_exclude_adapter_contains_adapter(
+        excluded: &[&dx::Adapter3],
+        adapter: &dx::Adapter3,
+    ) -> bool {
+        excluded
+            .iter()
+            .find(|a| {
+                match (
+                    a.get_desc1().map(|d| d.adapter_luid()),
+                    adapter.get_desc1().map(|d| d.adapter_luid()),
+                ) {
+                    (Ok(l1), Ok(l2)) => l1 == l2,
+                    _ => false,
+                }
+            })
+            .is_some()
     }
 }
 
@@ -140,7 +210,7 @@ impl DescriptorHeap {
         }
     }
 
-    pub fn alloc(self: &Rc<Self>) -> Descriptor {
+    pub fn alloc(&self) -> Descriptor {
         let mut descriptors = self.descriptors.borrow_mut();
 
         let Some((index, val)) = descriptors
@@ -166,7 +236,6 @@ impl DescriptorHeap {
             heap_index: index,
             cpu,
             gpu,
-            parent: Rc::clone(self),
         }
     }
 }
@@ -176,13 +245,6 @@ pub struct Descriptor {
     pub heap_index: usize,
     pub cpu: dx::CpuDescriptorHandle,
     pub gpu: dx::GpuDescriptorHandle,
-    pub parent: Rc<DescriptorHeap>,
-}
-
-impl Drop for Descriptor {
-    fn drop(&mut self) {
-        self.parent.descriptors.borrow_mut()[self.heap_index] = false;
-    }
 }
 
 pub struct Fence {
@@ -774,7 +836,7 @@ impl GraphicsPipeline {
                     } else {
                         dx::FillMode::Solid
                     })
-                    .with_cull_mode(dx::CullMode::None),
+                    .with_cull_mode(dx::CullMode::Front),
             )
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
