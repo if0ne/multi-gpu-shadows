@@ -1,5 +1,6 @@
 use std::{
-    cell::RefCell, collections::HashMap, ffi::CString, num::NonZero, ops::Range, path::Path, rc::Rc,
+    cell::RefCell, collections::HashMap, ffi::CString, num::NonZero, ops::Range, path::Path,
+    rc::Rc, sync::atomic::AtomicU64,
 };
 
 use oxidx::dx::{
@@ -7,8 +8,9 @@ use oxidx::dx::{
     IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource,
     IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE,
 };
+use parking_lot::Mutex;
 
-use crate::utils::new_uuid;
+use crate::utils::{new_uuid, Id};
 
 pub const FRAMES_IN_FLIGHT: usize = 3;
 
@@ -26,6 +28,7 @@ pub enum AdapterType {
 }
 
 pub struct Device {
+    pub id: Id<Device>,
     pub factory: dx::Factory4,
     pub adapter: dx::Adapter3,
     pub gpu: dx::Device,
@@ -74,16 +77,39 @@ impl Device {
         let shader_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
         let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 32);
 
+        let id = Id::new();
+
         Some(Self {
+            id,
+
             factory,
             adapter,
             gpu: device,
             debug,
+
             rtv_heap,
             dsv_heap,
             shader_heap,
             sampler_heap,
         })
+    }
+
+    pub fn create_resource(
+        &self,
+        desc: &dx::ResourceDesc,
+        heap_props: &dx::HeapProperties,
+        state: dx::ResourceStates,
+        name: impl ToString,
+    ) -> GpuResource {
+        let name = name.to_string();
+        let uuid = new_uuid();
+
+        let res = self
+            .gpu
+            .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
+            .expect(&format!("Failed to create resource {}", name));
+
+        GpuResource { res, name, uuid }
     }
 
     fn get_adapter(factory: &dx::Factory4, settings: &DeviceSettings) -> Option<dx::Adapter3> {
@@ -180,12 +206,12 @@ pub struct DescriptorHeap {
     pub size: usize,
     pub inc_size: usize,
     pub shader_visible: bool,
-    pub descriptors: RefCell<Vec<bool>>,
+    pub descriptors: Mutex<Vec<bool>>,
 }
 
 impl DescriptorHeap {
     pub fn new(device: &dx::Device, ty: dx::DescriptorHeapType, size: usize) -> Self {
-        let descriptors = RefCell::new(vec![false; size]);
+        let descriptors = Mutex::new(vec![false; size]);
 
         let (shader_visible, flags) =
             if ty == dx::DescriptorHeapType::CbvSrvUav || ty == dx::DescriptorHeapType::Sampler {
@@ -211,7 +237,7 @@ impl DescriptorHeap {
     }
 
     pub fn alloc(&self) -> Descriptor {
-        let mut descriptors = self.descriptors.borrow_mut();
+        let mut descriptors = self.descriptors.lock();
 
         let Some((index, val)) = descriptors
             .iter_mut()
@@ -238,6 +264,10 @@ impl DescriptorHeap {
             gpu,
         }
     }
+
+    pub fn free(&self, descriptor: Descriptor) {
+        self.descriptors.lock()[descriptor.heap_index] = false;
+    }
 }
 
 #[derive(Debug)]
@@ -249,7 +279,7 @@ pub struct Descriptor {
 
 pub struct Fence {
     pub fence: dx::Fence,
-    pub value: RefCell<u64>,
+    pub value: AtomicU64,
 }
 
 impl Fence {
@@ -277,14 +307,28 @@ impl Fence {
         }
     }
 
+    pub fn inc_value(&self) -> u64 {
+        self.value
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
+
     pub fn completed_value(&self) -> u64 {
         self.fence.get_completed_value()
+    }
+
+    pub fn get_current_value(&self) -> u64 {
+        self.value.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 pub struct CommandQueue {
-    pub queue: dx::CommandQueue,
+    pub queue: Mutex<dx::CommandQueue>,
     pub ty: dx::CommandListType,
+
+    pub fence: Fence,
+
+    pub frequency: f64,
 }
 
 impl CommandQueue {
@@ -294,22 +338,46 @@ impl CommandQueue {
             .create_command_queue(&dx::CommandQueueDesc::new(ty))
             .expect("Failed to create command queue");
 
-        Self { queue, ty }
+        let fence = Fence::new(device);
+
+        let frequency = 1000.0
+            / queue
+                .get_timestamp_frequency()
+                .expect("Failed to fetch timestamp frequency") as f64;
+
+        Self {
+            queue: Mutex::new(queue),
+            ty,
+            fence,
+            frequency,
+        }
     }
 
-    pub fn wait(&self, fence: &Fence, value: u64) {
+    pub fn wait_on_gpu(&self, value: u64) {
         self.queue
-            .wait(&fence.fence, value)
+            .lock()
+            .wait(&self.fence.fence, value)
             .expect("Failed to queue wait");
     }
 
-    pub fn signal(&self, fence: &Fence) -> u64 {
-        let mut guard = fence.value.borrow_mut();
-        *guard += 1;
+    pub fn wait_other_queue(&self, queue: &CommandQueue) {
         self.queue
-            .signal(&fence.fence, *guard)
+            .lock()
+            .wait(&queue.fence.fence, queue.fence.get_current_value())
+            .expect("Failed to queue wait");
+    }
+
+    pub fn wait_on_cpu(&self, value: u64) {
+        self.fence.wait(value);
+    }
+
+    pub fn signal(&self) -> u64 {
+        let value = self.fence.inc_value();
+        self.queue
+            .lock()
+            .signal(&self.fence.fence, value)
             .expect("Failed to signal");
-        *guard
+        value
     }
 
     pub fn submit(&self, buffers: &[&CommandBuffer]) {
@@ -318,7 +386,7 @@ impl CommandQueue {
             .map(|b| Some(b.list.clone()))
             .collect::<Vec<_>>();
 
-        self.queue.execute_command_lists(&lists);
+        self.queue.lock().execute_command_lists(&lists);
     }
 }
 
@@ -329,59 +397,9 @@ pub struct GpuResource {
     pub uuid: u64,
 }
 
-pub struct GpuResourceTracker {
-    pub tracked: RefCell<Vec<Rc<GpuResource>>>,
-    pub device: Rc<Device>,
-}
-
-impl GpuResourceTracker {
-    pub fn new(device: &Rc<Device>) -> Self {
-        Self {
-            device: Rc::clone(device),
-            tracked: Default::default(),
-        }
-    }
-
-    pub fn alloc(
-        &self,
-        desc: &dx::ResourceDesc,
-        heap_props: &dx::HeapProperties,
-        state: dx::ResourceStates,
-        name: impl ToString,
-    ) -> Rc<GpuResource> {
-        let name = name.to_string();
-        let uuid = new_uuid();
-
-        let res = self
-            .device
-            .gpu
-            .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
-            .expect(&format!("Failed to create resource {}", name));
-
-        let res = Rc::new(GpuResource { res, name, uuid });
-        self.register(Rc::clone(&res));
-
-        res
-    }
-
-    pub fn register(&self, res: Rc<GpuResource>) {
-        self.tracked.borrow_mut().push(res);
-    }
-
-    pub fn free(&self, res: &GpuResource) {
-        self.tracked.borrow_mut().retain(|r| r.uuid != res.uuid);
-    }
-
-    pub fn report(&self) {
-        for res in self.tracked.borrow().iter() {
-            println!("[d3d12] report reosurce {}", res.name)
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Texture {
-    pub res: Rc<GpuResource>,
+    pub res: GpuResource,
     pub uuid: u64,
     pub width: u32,
     pub height: u32,
@@ -392,7 +410,7 @@ pub struct Texture {
 
 impl Texture {
     pub fn new(
-        tracker: &GpuResourceTracker,
+        device: &Device,
         width: u32,
         height: u32,
         format: dx::Format,
@@ -410,7 +428,7 @@ impl Texture {
             .with_layout(dx::TextureLayout::Unknown)
             .with_flags(flags);
 
-        let res = tracker.alloc(
+        let res = device.create_resource(
             &desc,
             &dx::HeapProperties::default(),
             dx::ResourceStates::Common,
@@ -544,7 +562,13 @@ impl Swapchain {
 
         let swapchain = device
             .factory
-            .create_swapchain_for_hwnd(&present_queue.queue, hwnd, &desc, None, dx::OUTPUT_NONE)
+            .create_swapchain_for_hwnd(
+                &*present_queue.queue.lock(),
+                hwnd,
+                &desc,
+                None,
+                dx::OUTPUT_NONE,
+            )
             .expect("Failed to create swapchain");
 
         let mut swapchain = Self {
@@ -586,11 +610,11 @@ impl Swapchain {
                 .create_render_target_view(Some(&res), None, descriptor.cpu);
 
             let texture = Rc::new(Texture {
-                res: Rc::new(GpuResource {
+                res: GpuResource {
                     res: res.clone(),
                     name: "Swapchain Image".to_string(),
                     uuid: 0,
-                }),
+                },
                 uuid: 0,
                 width,
                 height,
@@ -888,7 +912,7 @@ pub enum BufferType {
 
 #[derive(Debug)]
 pub struct Buffer {
-    pub res: Rc<GpuResource>,
+    pub res: GpuResource,
     pub ty: BufferType,
     pub state: RefCell<dx::ResourceStates>,
 
@@ -905,7 +929,7 @@ pub struct Buffer {
 
 impl Buffer {
     pub fn new(
-        gpu_tracker: &GpuResourceTracker,
+        device: &Device,
         size: usize,
         stride: usize,
         ty: BufferType,
@@ -936,7 +960,7 @@ impl Buffer {
 
         let desc = dx::ResourceDesc::buffer(size).with_flags(flags);
 
-        let res = gpu_tracker.alloc(&desc, &heap_props, state, name);
+        let res = device.create_resource(&desc, &heap_props, state, name);
 
         let vbv = if ty == BufferType::Vertex {
             Some(dx::VertexBufferView::new(

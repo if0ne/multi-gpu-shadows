@@ -2,7 +2,7 @@ use std::{collections::HashMap, num::NonZero, rc::Rc};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec2, vec3};
-use gltf::{Model, Node, Vertex};
+use gltf::{Node, Vertex};
 use oxidx::dx;
 use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
 use winit::{
@@ -28,20 +28,16 @@ pub struct WindowContext {
 
 pub struct Application {
     pub device: Rc<rhi::Device>,
-    pub tracker: rhi::GpuResourceTracker,
 
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub cmd_queue: rhi::CommandQueue,
-    pub fence: rhi::Fence,
     pub cmd_lists: [rhi::CommandBuffer; FRAMES_IN_FLIGHT],
     pub fence_values: [u64; FRAMES_IN_FLIGHT],
     pub camera_buffers: [rhi::Buffer; FRAMES_IN_FLIGHT],
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
-
-    pub model: Model,
 
     pub camera: Camera,
     pub camera_controller: FpsController,
@@ -72,16 +68,6 @@ impl Application {
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
         let fence = rhi::Fence::new(&device);
 
-        let tracker = rhi::GpuResourceTracker::new(&device);
-
-        let model = Model::load(
-            &device,
-            &tracker,
-            &cmd_queue,
-            &fence,
-            "./assets/fantasy_island/scene.gltf",
-        );
-
         let cmd_list = rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, false);
 
         let vertices = vec![
@@ -105,7 +91,7 @@ impl Application {
         let indices = vec![0u32, 1, 2];
 
         let mut vertex_staging = rhi::Buffer::new(
-            &tracker,
+            &device,
             vertices.len() * std::mem::size_of::<Vertex>(),
             std::mem::size_of::<Vertex>(),
             rhi::BufferType::Copy,
@@ -119,7 +105,7 @@ impl Application {
         }
 
         let mut index_staging = rhi::Buffer::new(
-            &tracker,
+            &device,
             indices.len() * std::mem::size_of::<u32>(),
             std::mem::size_of::<u32>(),
             rhi::BufferType::Copy,
@@ -133,7 +119,7 @@ impl Application {
         }
 
         let vertex_buffer = rhi::Buffer::new(
-            &tracker,
+            &device,
             vertices.len() * std::mem::size_of::<Vertex>(),
             std::mem::size_of::<Vertex>(),
             rhi::BufferType::Vertex,
@@ -142,7 +128,7 @@ impl Application {
         );
 
         let index_buffer = rhi::Buffer::new(
-            &tracker,
+            &device,
             indices.len() * std::mem::size_of::<u32>(),
             std::mem::size_of::<u32>(),
             rhi::BufferType::Index,
@@ -155,8 +141,8 @@ impl Application {
         cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
         cmd_list.end();
         cmd_queue.submit(&[&cmd_list]);
-        let v = cmd_queue.signal(&fence);
-        cmd_queue.wait(&fence, v);
+        let v = cmd_queue.signal();
+        cmd_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -202,7 +188,7 @@ impl Application {
 
         let camera_buffers = std::array::from_fn(|_| {
             let mut buffer = rhi::Buffer::new(
-                &tracker,
+                &device,
                 size_of::<GpuCamera>(),
                 0,
                 rhi::BufferType::Constant,
@@ -216,14 +202,11 @@ impl Application {
 
         Self {
             device,
-            tracker,
             cmd_queue,
-            fence,
             cmd_lists,
             fence_values,
             camera_buffers,
             wnd_ctx: None,
-            model,
             curr_frame: 0,
             camera,
             camera_controller: controller,
@@ -328,11 +311,11 @@ impl Application {
 
         list.end();
         self.cmd_queue.submit(&[list]);
-        self.fence_values[self.curr_frame] = self.cmd_queue.signal(&self.fence);
+        self.fence_values[self.curr_frame] = self.cmd_queue.signal();
         ctx.swapchain.present(true);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.cmd_queue
-            .wait(&self.fence, self.fence_values[self.curr_frame]);
+            .wait_on_cpu(self.fence_values[self.curr_frame]);
     }
 
     pub fn bind_window(&mut self, window: Window) {
@@ -360,7 +343,7 @@ impl Application {
 impl Drop for Application {
     fn drop(&mut self) {
         self.cmd_queue
-            .wait(&self.fence, self.fence_values[self.curr_frame]);
+            .wait_on_cpu(self.fence_values[self.curr_frame]);
     }
 }
 

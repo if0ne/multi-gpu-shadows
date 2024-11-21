@@ -57,7 +57,7 @@ impl Model {
     fn process_node(
         node: &gltf::Node,
         parent: Rc<RefCell<Node>>,
-        tracker: &rhi::GpuResourceTracker,
+        device: &rhi::Device,
         buffers: &[gltf::buffer::Data],
         staging_buffers: &mut Vec<rhi::Buffer>,
         cmd_buffer: &rhi::CommandBuffer,
@@ -67,7 +67,7 @@ impl Model {
             primitives: vec![],
             model_buffer: std::array::from_fn(|_| {
                 rhi::Buffer::new(
-                    tracker,
+                    device,
                     512,
                     0,
                     rhi::BufferType::Constant,
@@ -86,7 +86,7 @@ impl Model {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
                 Self::process_primitive(
-                    tracker,
+                    device,
                     &primitive,
                     &mut new_node.borrow_mut(),
                     buffers,
@@ -100,7 +100,7 @@ impl Model {
             Self::process_node(
                 &child,
                 new_node.clone(),
-                tracker,
+                device,
                 buffers,
                 staging_buffers,
                 cmd_buffer,
@@ -109,7 +109,7 @@ impl Model {
     }
 
     fn process_primitive(
-        tracker: &rhi::GpuResourceTracker,
+        device: &rhi::Device,
         primitive: &gltf::Primitive,
         node: &mut Node,
         buffers: &[gltf::buffer::Data],
@@ -154,7 +154,7 @@ impl Model {
         let index_count = indecies.len();
 
         let mut vertex_staging = rhi::Buffer::new(
-            tracker,
+            device,
             vertex_count * std::mem::size_of::<Vertex>(),
             std::mem::size_of::<Vertex>(),
             rhi::BufferType::Copy,
@@ -168,7 +168,7 @@ impl Model {
         }
 
         let mut index_staging = rhi::Buffer::new(
-            tracker,
+            device,
             index_count * std::mem::size_of::<u32>(),
             std::mem::size_of::<u32>(),
             rhi::BufferType::Copy,
@@ -182,7 +182,7 @@ impl Model {
         }
 
         let vertex_buffer = rhi::Buffer::new(
-            tracker,
+            device,
             vertex_count * std::mem::size_of::<Vertex>(),
             std::mem::size_of::<Vertex>(),
             rhi::BufferType::Vertex,
@@ -191,7 +191,7 @@ impl Model {
         );
 
         let index_buffer = rhi::Buffer::new(
-            tracker,
+            device,
             index_count * std::mem::size_of::<u32>(),
             std::mem::size_of::<u32>(),
             rhi::BufferType::Index,
@@ -214,13 +214,7 @@ impl Model {
         });
     }
 
-    pub fn load(
-        device: &rhi::Device,
-        tracker: &rhi::GpuResourceTracker,
-        queue: &rhi::CommandQueue,
-        fence: &rhi::Fence,
-        path: impl AsRef<Path>,
-    ) -> Self {
+    pub fn load(device: &rhi::Device, queue: &rhi::CommandQueue, path: impl AsRef<Path>) -> Self {
         let (gltf, buffers, images) = gltf::import(&path).expect("Failed to open gltf model");
 
         let cmd_buffer = rhi::CommandBuffer::new(device, dx::CommandListType::Direct, false);
@@ -234,7 +228,7 @@ impl Model {
             primitives: vec![],
             model_buffer: std::array::from_fn(|_| {
                 rhi::Buffer::new(
-                    tracker,
+                    device,
                     512,
                     0,
                     rhi::BufferType::Constant,
@@ -252,7 +246,7 @@ impl Model {
             Self::process_node(
                 &node,
                 root.clone(),
-                tracker,
+                device,
                 &buffers,
                 &mut staging_buffers,
                 &cmd_buffer,
@@ -261,8 +255,8 @@ impl Model {
 
         cmd_buffer.end();
         queue.submit(&[&cmd_buffer]);
-        let value = queue.signal(fence);
-        fence.wait(value);
+        let value = queue.signal();
+        queue.wait_on_cpu(value);
 
         Self {
             path: path.as_ref().to_path_buf(),
