@@ -33,7 +33,7 @@ impl MatrixExt for glam::Mat4 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Id<T> {
     pub id: usize,
     pub _marker: PhantomData<T>,
@@ -51,3 +51,22 @@ impl<T> Id<T> {
         }
     }
 }
+
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            _marker: self._marker.clone(),
+        }
+    }
+}
+
+impl<T> Copy for Id<T> {}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self._marker == other._marker
+    }
+}
+
+impl<T> Eq for Id<T> {}

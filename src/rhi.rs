@@ -33,6 +33,7 @@ pub enum AdapterType {
     Hardware { high_perf: bool },
 }
 
+#[derive(Debug)]
 pub struct Device {
     pub id: Id<Device>,
     pub factory: dx::Factory4,
@@ -78,12 +79,12 @@ impl Device {
         let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
             .expect("Failed to create device");
 
-        let rtv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Rtv, 128);
-        let dsv_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Dsv, 128);
-        let shader_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::CbvSrvUav, 1024);
-        let sampler_heap = DescriptorHeap::new(&device, dx::DescriptorHeapType::Sampler, 32);
-
         let id = Id::new();
+
+        let rtv_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Rtv, 128);
+        let dsv_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Dsv, 128);
+        let shader_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::CbvSrvUav, 1024);
+        let sampler_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Sampler, 32);
 
         Some(Self {
             id,
@@ -204,6 +205,7 @@ impl Device {
 
 #[derive(Debug)]
 pub struct DescriptorHeap {
+    pub device_id: Id<Device>,
     pub heap: dx::DescriptorHeap,
     pub ty: dx::DescriptorHeapType,
     pub size: usize,
@@ -213,7 +215,12 @@ pub struct DescriptorHeap {
 }
 
 impl DescriptorHeap {
-    pub fn new(device: &dx::Device, ty: dx::DescriptorHeapType, size: usize) -> Self {
+    pub fn new(
+        device: &dx::Device,
+        device_id: Id<Device>,
+        ty: dx::DescriptorHeapType,
+        size: usize,
+    ) -> Self {
         let descriptors = Mutex::new(vec![false; size]);
 
         let (shader_visible, flags) =
@@ -230,6 +237,7 @@ impl DescriptorHeap {
             .expect("Failed to create descriptor heap");
 
         Self {
+            device_id,
             heap,
             ty,
             size,
@@ -262,6 +270,7 @@ impl DescriptorHeap {
             .advance(index, self.inc_size);
 
         Descriptor {
+            device_id: self.device_id,
             heap_index: index,
             cpu,
             gpu,
@@ -275,6 +284,7 @@ impl DescriptorHeap {
 
 #[derive(Debug)]
 pub struct Descriptor {
+    pub device_id: Id<Device>,
     pub heap_index: usize,
     pub cpu: dx::CpuDescriptorHandle,
     pub gpu: dx::GpuDescriptorHandle,

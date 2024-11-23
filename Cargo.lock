@@ -642,6 +642,7 @@ dependencies = [
 name = "multi-gpu-shadows"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "glam",
  "gltf",
  "oxidx",
