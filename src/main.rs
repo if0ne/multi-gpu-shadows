@@ -2,7 +2,7 @@ use std::{collections::HashMap, num::NonZero, rc::Rc};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec2, vec3};
-use gltf::{Node, Vertex};
+use gltf::Vertex;
 use oxidx::dx;
 use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
 use winit::{
@@ -32,8 +32,7 @@ pub struct Application {
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub cmd_queue: rhi::CommandQueue,
-    pub cmd_lists: [rhi::CommandBuffer; FRAMES_IN_FLIGHT],
-    pub fence_values: [u64; FRAMES_IN_FLIGHT],
+
     pub camera_buffers: [rhi::Buffer; FRAMES_IN_FLIGHT],
     pub curr_frame: usize,
 
@@ -66,9 +65,6 @@ impl Application {
         );
 
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
-        let fence = rhi::Fence::new(&device);
-
-        let cmd_list = rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, false);
 
         let vertices = vec![
             Vertex {
@@ -136,12 +132,12 @@ impl Application {
             format!("{} Index Buffer", "Check"),
         );
 
-        cmd_list.begin(&device, false);
+        let cmd_list = cmd_queue.get_command_buffer(&device);
+        cmd_list.begin(&device);
         cmd_list.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
         cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
-        cmd_list.end();
-        cmd_queue.submit(&[&cmd_list]);
-        let v = cmd_queue.signal();
+        cmd_queue.push_cmd_buffer(cmd_list);
+        let v = cmd_queue.execute();
         cmd_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
@@ -170,12 +166,6 @@ impl Application {
             },
         );
 
-        let cmd_lists = std::array::from_fn(|_| {
-            rhi::CommandBuffer::new(&device, dx::CommandListType::Direct, true)
-        });
-
-        let fence_values = std::array::from_fn(|_| v);
-
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
             far: 1000.0,
@@ -203,8 +193,6 @@ impl Application {
         Self {
             device,
             cmd_queue,
-            cmd_lists,
-            fence_values,
             camera_buffers,
             wnd_ctx: None,
             curr_frame: 0,
@@ -271,32 +259,20 @@ impl Application {
         };
     }
 
-    fn draw_node(&self, cmd_list: &rhi::CommandBuffer, node: &Node) {
-        for prim in &node.primitives {
-            cmd_list.set_vertex_buffer(&prim.vertex_buffer);
-            cmd_list.set_index_buffer(&prim.index_buffer);
-            cmd_list.draw(prim.vtx_count);
-        }
-
-        for node in &node.children {
-            self.draw_node(cmd_list, &*node.borrow());
-        }
-    }
-
     pub fn render(&mut self) {
-        let Some(ctx) = &self.wnd_ctx else {
+        let Some(ctx) = &mut self.wnd_ctx else {
             return;
         };
 
-        let list = &self.cmd_lists[self.curr_frame];
-        let (_, texture, view) = &ctx.swapchain.resources[self.curr_frame];
+        let list = self.cmd_queue.get_command_buffer(&self.device);
+        let (_, texture, view, sync_point) = &mut ctx.swapchain.resources[self.curr_frame];
 
-        list.begin(&self.device, true);
+        list.begin(&self.device);
 
         list.set_image_barrier(texture, dx::ResourceStates::RenderTarget, None);
-        list.clear_render_target(view, 1.0, 0.0, 0.0);
+        list.clear_render_target(view, 0.0, 0.0, 0.0);
 
-        list.set_render_targets(&[&view], None);
+        list.set_render_targets(&[view], None);
         list.set_viewport(self.window_width, self.window_height);
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
@@ -309,13 +285,12 @@ impl Application {
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
-        list.end();
-        self.cmd_queue.submit(&[list]);
-        self.fence_values[self.curr_frame] = self.cmd_queue.signal();
+        self.cmd_queue.push_cmd_buffer(list);
+        *sync_point = self.cmd_queue.execute();
         ctx.swapchain.present(true);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.cmd_queue
-            .wait_on_cpu(self.fence_values[self.curr_frame]);
+            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
     }
 
     pub fn bind_window(&mut self, window: Window) {
@@ -342,8 +317,7 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
-        self.cmd_queue
-            .wait_on_cpu(self.fence_values[self.curr_frame]);
+        self.cmd_queue.wait_idle();
     }
 }
 
@@ -364,7 +338,7 @@ impl ApplicationHandler for Application {
         event: winit::event::WindowEvent,
     ) {
         match event {
-            WindowEvent::Focused(focused) => {
+            WindowEvent::Focused(_focused) => {
                 /*if focused {
                     self.base.app_paused = false;
                     self.base.timer.start();
@@ -381,7 +355,7 @@ impl ApplicationHandler for Application {
                     self.keys.insert(event.physical_key, false);
                 }
             },
-            WindowEvent::MouseInput { state, button, .. } => match state {
+            WindowEvent::MouseInput { state, .. } => match state {
                 winit::event::ElementState::Pressed =>
                     /*self.sample.on_mouse_down(button)*/
                     {}
@@ -396,9 +370,14 @@ impl ApplicationHandler for Application {
                 self.window_width = size.width;
                 self.window_height = size.height;
 
-                /*self.cmd_queue
-                    .wait(&self.fence, *self.fence.value.borrow());
-                context.swapchain.resize(&self.device, size.width, size.height);*/
+                self.cmd_queue.wait_idle();
+                context.swapchain.resize(
+                    &self.device,
+                    size.width,
+                    size.height,
+                    self.cmd_queue.fence.get_current_value(),
+                );
+                self.curr_frame = 0;
 
                 /*let Some(ref mut context) = self.base.context else {
                     return;

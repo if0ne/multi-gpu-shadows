@@ -1,6 +1,4 @@
-use glam::{Mat4, Vec4Swizzles};
-
-use crate::utils::MatrixExt;
+use glam::Mat4;
 
 #[derive(Clone, Debug)]
 #[repr(C)]

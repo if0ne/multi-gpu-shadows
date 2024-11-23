@@ -5,8 +5,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use oxidx::dx;
-
 use crate::rhi::{self, FRAMES_IN_FLIGHT};
 
 #[derive(Clone, Copy, Debug)]
@@ -215,10 +213,10 @@ impl Model {
     }
 
     pub fn load(device: &rhi::Device, queue: &rhi::CommandQueue, path: impl AsRef<Path>) -> Self {
-        let (gltf, buffers, images) = gltf::import(&path).expect("Failed to open gltf model");
+        let (gltf, buffers, _) = gltf::import(&path).expect("Failed to open gltf model");
 
-        let cmd_buffer = rhi::CommandBuffer::new(device, dx::CommandListType::Direct, false);
-        cmd_buffer.begin(device, false);
+        let cmd_buffer = queue.get_command_buffer(device);
+        cmd_buffer.begin(device);
 
         let scene = gltf.scenes().next().expect("No gltf scenes");
 
@@ -253,9 +251,8 @@ impl Model {
             );
         }
 
-        cmd_buffer.end();
-        queue.submit(&[&cmd_buffer]);
-        let value = queue.signal();
+        queue.push_cmd_buffer(cmd_buffer);
+        let value = queue.execute();
         queue.wait_on_cpu(value);
 
         Self {
@@ -268,7 +265,6 @@ impl Model {
     }
 
     fn compute_transform(node: &gltf::Node) -> glam::Mat4 {
-        let transform = glam::Mat4::from_cols_array_2d(&node.transform().matrix());
-        transform
+        glam::Mat4::from_cols_array_2d(&node.transform().matrix())
     }
 }

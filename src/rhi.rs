@@ -1,6 +1,12 @@
 use std::{
-    cell::RefCell, collections::HashMap, ffi::CString, num::NonZero, ops::Range, path::Path,
-    rc::Rc, sync::atomic::AtomicU64,
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    ffi::CString,
+    num::NonZero,
+    ops::Range,
+    path::Path,
+    rc::Rc,
+    sync::atomic::AtomicU64,
 };
 
 use oxidx::dx::{
@@ -107,7 +113,7 @@ impl Device {
         let res = self
             .gpu
             .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
-            .expect(&format!("Failed to create resource {}", name));
+            .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
         GpuResource { res, name, uuid }
     }
@@ -184,18 +190,15 @@ impl Device {
         excluded: &[&dx::Adapter3],
         adapter: &dx::Adapter3,
     ) -> bool {
-        excluded
-            .iter()
-            .find(|a| {
-                match (
-                    a.get_desc1().map(|d| d.adapter_luid()),
-                    adapter.get_desc1().map(|d| d.adapter_luid()),
-                ) {
-                    (Ok(l1), Ok(l2)) => l1 == l2,
-                    _ => false,
-                }
-            })
-            .is_some()
+        excluded.iter().any(|a| {
+            match (
+                a.get_desc1().map(|d| d.adapter_luid()),
+                adapter.get_desc1().map(|d| d.adapter_luid()),
+            ) {
+                (Ok(l1), Ok(l2)) => l1 == l2,
+                _ => false,
+            }
+        })
     }
 }
 
@@ -242,7 +245,7 @@ impl DescriptorHeap {
         let Some((index, val)) = descriptors
             .iter_mut()
             .enumerate()
-            .skip_while(|(_, b)| **b == true)
+            .skip_while(|(_, b)| **b)
             .next()
         else {
             panic!("Out of memory in descriptor heap");
@@ -296,7 +299,7 @@ impl Fence {
     }
 
     pub fn wait(&self, value: u64) {
-        if self.completed_value() < value {
+        if self.get_completed_value() < value {
             let event = dx::Event::create(false, false).expect("Failed to create event");
             self.fence
                 .set_event_on_completion(value, event)
@@ -313,7 +316,7 @@ impl Fence {
             + 1
     }
 
-    pub fn completed_value(&self) -> u64 {
+    pub fn get_completed_value(&self) -> u64 {
         self.fence.get_completed_value()
     }
 
@@ -322,11 +325,22 @@ impl Fence {
     }
 }
 
+pub(crate) struct CommandAllocatorEntry {
+    pub(crate) raw: dx::CommandAllocator,
+    pub(crate) sync_point: u64,
+}
+
 pub struct CommandQueue {
     pub queue: Mutex<dx::CommandQueue>,
     pub ty: dx::CommandListType,
 
     pub fence: Fence,
+
+    cmd_allocators: Mutex<VecDeque<CommandAllocatorEntry>>,
+    cmd_lists: Mutex<Vec<dx::GraphicsCommandList>>,
+
+    in_record: Mutex<Vec<CommandBuffer>>,
+    pending: Mutex<Vec<CommandBuffer>>,
 
     pub frequency: f64,
 }
@@ -345,11 +359,32 @@ impl CommandQueue {
                 .get_timestamp_frequency()
                 .expect("Failed to fetch timestamp frequency") as f64;
 
+        let cmd_allocators = (0..FRAMES_IN_FLIGHT)
+            .map(|_| CommandAllocatorEntry {
+                raw: device
+                    .gpu
+                    .create_command_allocator(ty)
+                    .expect("Failed to create command allocator"),
+                sync_point: 0,
+            })
+            .collect::<VecDeque<_>>();
+
+        let cmd_list = device
+            .gpu
+            .create_command_list(0, ty, &cmd_allocators[0].raw, PSO_NONE)
+            .expect("Failed to create command list");
+        cmd_list.close().expect("Failed to close list");
+
         Self {
             queue: Mutex::new(queue),
             ty,
             fence,
             frequency,
+
+            cmd_allocators: Mutex::new(cmd_allocators),
+            cmd_lists: Mutex::new(vec![cmd_list]),
+            in_record: Default::default(),
+            pending: Default::default(),
         }
     }
 
@@ -371,7 +406,93 @@ impl CommandQueue {
         self.fence.wait(value);
     }
 
-    pub fn signal(&self) -> u64 {
+    pub fn wait_idle(&self) {
+        let value = self.signal();
+        self.wait_on_cpu(value);
+    }
+
+    pub fn stash_cmd_buffer(&self, cmd_buffer: CommandBuffer) {
+        self.in_record.lock().push(cmd_buffer);
+    }
+
+    pub fn push_cmd_buffer(&self, cmd_buffer: CommandBuffer) {
+        cmd_buffer.list.close().expect("Failed to close list");
+        self.pending.lock().push(cmd_buffer);
+    }
+
+    pub fn execute(&self) -> u64 {
+        let cmd_buffers = self.pending.lock().drain(..).collect::<Vec<_>>();
+        let lists = cmd_buffers
+            .iter()
+            .map(|b| Some(b.list.clone()))
+            .collect::<Vec<_>>();
+
+        self.queue.lock().execute_command_lists(&lists);
+        let fence_value = self.signal();
+
+        let allocators = cmd_buffers.into_iter().map(|mut buffer| {
+            buffer.allocator.sync_point = fence_value;
+            buffer.allocator
+        });
+        self.cmd_allocators.lock().extend(allocators);
+
+        let lists = lists
+            .into_iter()
+            .map(|list| unsafe { list.unwrap_unchecked() });
+        self.cmd_lists.lock().extend(lists);
+
+        fence_value
+    }
+
+    pub fn get_command_buffer(&self, device: &Device) -> CommandBuffer {
+        if let Some(buffer) = self.in_record.lock().pop() {
+            return buffer;
+        };
+
+        let allocator = if let Some(allocator) =
+            self.cmd_allocators.lock().pop_front().and_then(|a| {
+                if self.is_fence_complete(a.sync_point) {
+                    Some(a)
+                } else {
+                    None
+                }
+            }) {
+            allocator
+                .raw
+                .reset()
+                .expect("Failed to reset command allocator");
+            allocator
+        } else {
+            CommandAllocatorEntry {
+                raw: device
+                    .gpu
+                    .create_command_allocator(self.ty)
+                    .expect("Failed to create command allocator"),
+                sync_point: 0,
+            }
+        };
+
+        let list = if let Some(list) = self.cmd_lists.lock().pop() {
+            list.reset(&allocator.raw, PSO_NONE)
+                .expect("Failed to reset list");
+            list
+        } else {
+            let list = device
+                .gpu
+                .create_command_list(0, self.ty, &allocator.raw, PSO_NONE)
+                .expect("Failed to create command list");
+            list.close().expect("Failed to close list");
+            list
+        };
+
+        CommandBuffer {
+            ty: self.ty,
+            list,
+            allocator,
+        }
+    }
+
+    fn signal(&self) -> u64 {
         let value = self.fence.inc_value();
         self.queue
             .lock()
@@ -380,13 +501,8 @@ impl CommandQueue {
         value
     }
 
-    pub fn submit(&self, buffers: &[&CommandBuffer]) {
-        let lists = buffers
-            .iter()
-            .map(|b| Some(b.list.clone()))
-            .collect::<Vec<_>>();
-
-        self.queue.lock().execute_command_lists(&lists);
+    fn is_fence_complete(&self, value: u64) -> bool {
+        self.fence.get_completed_value() >= value
     }
 }
 
@@ -450,7 +566,7 @@ impl Texture {
         let mip = mip.map(|m| m..(m + 1)).unwrap_or(0..self.levels);
 
         let desc = self.res.res.get_desc();
-        device.get_copyable_footprints(&desc, mip, 0, &mut vec![], &mut vec![], &mut vec![])
+        device.get_copyable_footprints(&desc, mip, 0, &mut [], &mut [], &mut [])
     }
 }
 
@@ -540,7 +656,7 @@ impl TextureView {
 pub struct Swapchain {
     pub swapchain: dx::Swapchain1,
     pub hwnd: NonZero<isize>,
-    pub resources: Vec<(dx::Resource, Rc<Texture>, TextureView)>,
+    pub resources: Vec<(dx::Resource, Rc<Texture>, TextureView, u64)>,
     pub width: u32,
     pub height: u32,
 }
@@ -578,12 +694,12 @@ impl Swapchain {
             width,
             height,
         };
-        swapchain.resize(device, width, height);
+        swapchain.resize(device, width, height, 0);
 
         swapchain
     }
 
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32, sync_point: u64) {
         {
             std::mem::take(&mut self.resources);
         }
@@ -629,7 +745,7 @@ impl Swapchain {
                 handle: descriptor,
             };
 
-            self.resources.push((res, texture, view));
+            self.resources.push((res, texture, view, sync_point));
         }
     }
 
@@ -860,7 +976,7 @@ impl GraphicsPipeline {
                     } else {
                         dx::FillMode::Solid
                     })
-                    .with_cull_mode(dx::CullMode::Front),
+                    .with_cull_mode(dx::CullMode::None),
             )
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
@@ -1048,7 +1164,7 @@ impl Buffer {
         self.srv = Some(d);
     }
 
-    pub fn map<'a, T>(&'a mut self, range: Option<Range<usize>>) -> BufferMap<'a, T> {
+    pub fn map<T>(&mut self, range: Option<Range<usize>>) -> BufferMap<'_, T> {
         let size = if let Some(ref r) = range {
             r.end - r.start
         } else {
@@ -1157,49 +1273,17 @@ impl GeomTopology {
 }
 
 pub struct CommandBuffer {
-    pub ty: dx::CommandListType,
-    pub list: dx::GraphicsCommandList,
-    pub allocator: dx::CommandAllocator,
+    pub(crate) ty: dx::CommandListType,
+    pub(crate) list: dx::GraphicsCommandList,
+    pub(crate) allocator: CommandAllocatorEntry,
 }
 
 impl CommandBuffer {
-    pub fn new(device: &Device, ty: dx::CommandListType, close: bool) -> Self {
-        let allocator = device
-            .gpu
-            .create_command_allocator(ty)
-            .expect("Failed to create command allocator");
-        let list: dx::GraphicsCommandList = device
-            .gpu
-            .create_command_list(0, ty, &allocator, PSO_NONE)
-            .expect("Failed to create command list");
-
-        if close {
-            list.close().expect("Failed to close");
-        }
-
-        Self {
-            ty,
-            list,
-            allocator,
-        }
-    }
-
-    pub fn begin(&self, device: &Device, reset: bool) {
-        if reset {
-            self.allocator.reset();
-            self.list
-                .reset(&self.allocator, PSO_NONE)
-                .expect("Failed to reset list");
-        }
-
+    pub fn begin(&self, device: &Device) {
         self.list.set_descriptor_heaps(&[
             Some(device.shader_heap.heap.clone()),
             Some(device.sampler_heap.heap.clone()),
         ]);
-    }
-
-    pub fn end(&self) {
-        self.list.close().expect("Failed to close list");
     }
 
     pub fn set_render_targets(&self, views: &[&TextureView], depth: Option<&TextureView>) {
@@ -1327,7 +1411,7 @@ impl CommandBuffer {
         let mut num_rows = vec![Default::default(); dst.levels as usize];
         let mut row_sizes = vec![Default::default(); dst.levels as usize];
 
-        let total_size = device.gpu.get_copyable_footprints(
+        let _total_size = device.gpu.get_copyable_footprints(
             &desc,
             0..dst.levels,
             0,
