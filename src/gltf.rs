@@ -1,11 +1,6 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    rc::{Rc, Weak},
-};
+use std::path::Path;
 
-use glam::Mat4;
+use glam::{Mat4, Vec3, Vec4};
 
 #[derive(Clone, Default)]
 pub struct Mesh {
@@ -40,7 +35,7 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
 
 impl Mesh {
     pub fn load(path: impl AsRef<Path>) -> Self {
-        let (gltf, buffers, imgs) = gltf::import(path).expect("Failed to open file");
+        let (gltf, buffers, _) = gltf::import(path).expect("Failed to open file");
 
         let scene = gltf
             .default_scene()
@@ -162,6 +157,40 @@ impl Mesh {
         }
 
         res
+    }
+}
+
+struct TangentCalcContext<'a> {
+    indices: &'a [u32],
+    positions: &'a [[f32; 3]],
+    normals: &'a [[f32; 3]],
+    uvs: &'a [[f32; 2]],
+    tangents: &'a mut [[f32; 4]],
+}
+
+impl<'a> mikktspace::Geometry for TangentCalcContext<'a> {
+    fn num_faces(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    fn num_vertices_of_face(&self, _face: usize) -> usize {
+        3
+    }
+
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.positions[self.indices[face * 3 + vert] as usize]
+    }
+
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.normals[self.indices[face * 3 + vert] as usize]
+    }
+
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        self.uvs[self.indices[face * 3 + vert] as usize]
+    }
+
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        self.tangents[self.indices[face * 3 + vert] as usize] = tangent;
     }
 }
 

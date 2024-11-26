@@ -2,7 +2,6 @@ use std::{collections::HashMap, num::NonZero, rc::Rc};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec2, vec3};
-use gltf::Vertex;
 use oxidx::dx;
 use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
 use winit::{
@@ -43,12 +42,6 @@ pub struct Application {
 
     pub pso: rhi::GraphicsPipeline,
 
-    pub vertex_buffer: rhi::Buffer,
-    pub vertex_staging: rhi::Buffer,
-
-    pub index_buffer: rhi::Buffer,
-    pub index_staging: rhi::Buffer,
-
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -65,80 +58,6 @@ impl Application {
         );
 
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
-
-        let vertices = vec![
-            Vertex {
-                pos: vec3(-0.5, -0.5, 0.0),
-                normals: vec3(0.0, 0.0, -1.0),
-                uv: vec2(0.0, 1.0),
-            },
-            Vertex {
-                pos: vec3(0.0, 0.5, 0.0),
-                normals: vec3(0.0, 0.0, -1.0),
-                uv: vec2(0.0, 0.0),
-            },
-            Vertex {
-                pos: vec3(0.5, -0.5, 0.0),
-                normals: vec3(0.0, 0.0, -1.0),
-                uv: vec2(1.0, 0.0),
-            },
-        ];
-
-        let indices = vec![0u32, 1, 2];
-
-        let mut vertex_staging = rhi::Buffer::new(
-            &device,
-            vertices.len() * std::mem::size_of::<Vertex>(),
-            std::mem::size_of::<Vertex>(),
-            rhi::BufferType::Copy,
-            false,
-            format!("{} Vertex Buffer", "Check"),
-        );
-
-        {
-            let map = vertex_staging.map::<Vertex>(None);
-            map.pointer.clone_from_slice(&vertices);
-        }
-
-        let mut index_staging = rhi::Buffer::new(
-            &device,
-            indices.len() * std::mem::size_of::<u32>(),
-            std::mem::size_of::<u32>(),
-            rhi::BufferType::Copy,
-            false,
-            format!("{} Index Buffer", "check"),
-        );
-
-        {
-            let map = index_staging.map::<u32>(None);
-            map.pointer.clone_from_slice(&indices);
-        }
-
-        let vertex_buffer = rhi::Buffer::new(
-            &device,
-            vertices.len() * std::mem::size_of::<Vertex>(),
-            std::mem::size_of::<Vertex>(),
-            rhi::BufferType::Vertex,
-            false,
-            format!("{} Vertex Buffer", "Check"),
-        );
-
-        let index_buffer = rhi::Buffer::new(
-            &device,
-            indices.len() * std::mem::size_of::<u32>(),
-            std::mem::size_of::<u32>(),
-            rhi::BufferType::Index,
-            false,
-            format!("{} Index Buffer", "Check"),
-        );
-
-        let cmd_list = cmd_queue.get_command_buffer(&device);
-        cmd_list.begin(&device);
-        cmd_list.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
-        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
-        cmd_queue.push_cmd_buffer(cmd_list);
-        let v = cmd_queue.execute();
-        cmd_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -199,10 +118,6 @@ impl Application {
             camera,
             camera_controller: controller,
             pso,
-            vertex_buffer,
-            vertex_staging,
-            index_buffer,
-            index_staging,
             window_width: width,
             window_height: height,
             keys: HashMap::new(),
@@ -278,10 +193,6 @@ impl Application {
         list.set_topology(rhi::GeomTopology::Triangles);
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
-
-        list.set_vertex_buffer(&self.vertex_buffer);
-        list.set_index_buffer(&self.index_buffer);
-        list.draw(3);
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
