@@ -2,6 +2,7 @@ use std::{collections::HashMap, num::NonZero, rc::Rc};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec2, vec3};
+use gltf::Mesh;
 use oxidx::dx;
 use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
 use winit::{
@@ -57,6 +58,7 @@ impl Application {
             .expect("Failed to create device"),
         );
 
+        let model = Mesh::load("./assets/fantasy_island/scene.gltf");
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
 
         let rs = Rc::new(rhi::RootSignature::new(
