@@ -43,6 +43,10 @@ pub struct Application {
 
     pub pso: rhi::GraphicsPipeline,
 
+    pub model: Mesh,
+    pub vertex_buffer: rhi::Buffer,
+    pub index_buffer: rhi::Buffer,
+
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -58,8 +62,62 @@ impl Application {
             .expect("Failed to create device"),
         );
 
-        let model = Mesh::load("./assets/fantasy_island/scene.gltf");
+        let model = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
+
+        let mut vertex_staging = rhi::Buffer::new(
+            &device,
+            model.positions.len() * std::mem::size_of::<[f32; 3]>(),
+            std::mem::size_of::<[f32; 3]>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Vertex Buffer", "Check"),
+        );
+
+        {
+            let map = vertex_staging.map::<[f32; 3]>(None);
+            map.pointer.clone_from_slice(&model.positions);
+        }
+
+        let mut index_staging = rhi::Buffer::new(
+            &device,
+            model.indices.len() * std::mem::size_of::<u32>(),
+            std::mem::size_of::<u32>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Index Buffer", "check"),
+        );
+
+        {
+            let map = index_staging.map::<u32>(None);
+            map.pointer.clone_from_slice(&model.indices);
+        }
+
+        let vertex_buffer = rhi::Buffer::new(
+            &device,
+            model.positions.len() * size_of::<[f32; 3]>(),
+            size_of::<[f32; 3]>(),
+            rhi::BufferType::Vertex,
+            false,
+            "vertex",
+        );
+
+        let index_buffer = rhi::Buffer::new(
+            &device,
+            model.indices.len() * size_of::<u32>(),
+            size_of::<u32>(),
+            rhi::BufferType::Index,
+            false,
+            "index",
+        );
+
+        let cmd_list = cmd_queue.get_command_buffer(&device);
+        cmd_list.begin(&device);
+        cmd_list.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
+        cmd_queue.push_cmd_buffer(cmd_list);
+        let v = cmd_queue.execute();
+        cmd_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -123,6 +181,10 @@ impl Application {
             window_width: width,
             window_height: height,
             keys: HashMap::new(),
+
+            model,
+            vertex_buffer,
+            index_buffer,
         }
     }
 
@@ -195,6 +257,10 @@ impl Application {
         list.set_topology(rhi::GeomTopology::Triangles);
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
+
+        list.set_vertex_buffer(&self.vertex_buffer);
+        list.set_index_buffer(&self.index_buffer);
+        list.draw(self.model.positions.len() as u32);
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
