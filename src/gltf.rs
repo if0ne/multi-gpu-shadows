@@ -5,9 +5,167 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::rhi::{self, FRAMES_IN_FLIGHT};
+use glam::Mat4;
+
+#[derive(Clone, Default)]
+pub struct Mesh {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub colors: Vec<[f32; 4]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub tangents: Vec<[f32; 4]>,
+    pub indices: Vec<u32>,
+}
 
 #[derive(Clone, Copy, Debug)]
+pub struct Submesh {
+    pub index_count: u32,
+    pub start_index_location: u32,
+    pub base_vertex_location: u32,
+}
+
+fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
+    node: &gltf::scene::Node,
+    xform: Mat4,
+    f: &mut F,
+) {
+    let node_xform = Mat4::from_cols_array_2d(&node.transform().matrix());
+    let xform = xform * node_xform;
+
+    f(node, xform);
+    for child in node.children() {
+        iter_gltf_node_tree(&child, xform, f);
+    }
+}
+
+impl Mesh {
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        let (gltf, buffers, imgs) = gltf::import(path).expect("Failed to open file");
+
+        let scene = gltf
+            .default_scene()
+            .or_else(|| gltf.scenes().next())
+            .expect("Failed to fetch scene");
+        let mut res = Mesh::default();
+
+        let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
+            if let Some(mesh) = node.mesh() {
+                let flip_winding_order = xform.determinant() < 0.0;
+
+                for prim in mesh.primitives() {
+                    let reader = prim.reader(|buffer| Some(&buffers[buffer.index()]));
+
+                    let positions = if let Some(iter) = reader.read_positions() {
+                        iter.collect::<Vec<_>>()
+                    } else {
+                        return;
+                    };
+
+                    let normals = if let Some(iter) = reader.read_normals() {
+                        iter.collect::<Vec<_>>()
+                    } else {
+                        return;
+                    };
+
+                    let (mut tangents, tangents_found) = if let Some(iter) = reader.read_tangents()
+                    {
+                        (iter.collect::<Vec<_>>(), true)
+                    } else {
+                        (vec![[1.0, 0.0, 0.0, 0.0]; positions.len()], false)
+                    };
+
+                    let (mut uvs, uvs_found) = if let Some(iter) = reader.read_tex_coords(0) {
+                        (iter.into_f32().collect::<Vec<_>>(), true)
+                    } else {
+                        (vec![[0.0, 0.0]; positions.len()], false)
+                    };
+
+                    let mut colors = if let Some(iter) = reader.read_colors(0) {
+                        iter.into_rgba_f32().collect::<Vec<_>>()
+                    } else {
+                        vec![[1.0, 1.0, 1.0, 1.0]; positions.len()]
+                    };
+
+                    let mut indices: Vec<u32>;
+                    {
+                        if let Some(indices_reader) = reader.read_indices() {
+                            indices = indices_reader.into_u32().collect();
+                        } else {
+                            if positions.is_empty() {
+                                return;
+                            }
+
+                            match prim.mode() {
+                                gltf::mesh::Mode::Triangles => {
+                                    indices = (0..positions.len() as u32).collect();
+                                }
+                                _ => {
+                                    panic!("Primitive mode {:?} not supported yet", prim.mode());
+                                }
+                            }
+                        }
+
+                        if flip_winding_order {
+                            for tri in indices.chunks_exact_mut(3) {
+                                tri.swap(0, 2);
+                            }
+                        }
+                    }
+
+                    if !tangents_found && uvs_found {
+                        mikktspace::generate_tangents(&mut TangentCalcContext {
+                            indices: indices.as_slice(),
+                            positions: positions.as_slice(),
+                            normals: normals.as_slice(),
+                            uvs: uvs.as_slice(),
+                            tangents: tangents.as_mut_slice(),
+                        });
+                    }
+
+                    {
+                        let base_index = res.positions.len() as u32;
+                        for i in &mut indices {
+                            *i += base_index;
+                        }
+
+                        res.indices.append(&mut indices);
+                        res.colors.append(&mut colors);
+                    }
+
+                    for v in positions {
+                        let pos = (xform * Vec3::from(v).extend(1.0)).truncate();
+                        res.positions.push(pos.into());
+                    }
+
+                    for v in normals {
+                        let norm = (xform * Vec3::from(v).extend(0.0)).truncate().normalize();
+                        res.normals.push(norm.into());
+                    }
+
+                    for v in tangents {
+                        let v = Vec4::from(v);
+                        let t = (xform * v.truncate().extend(0.0)).truncate().normalize();
+                        res.tangents.push(
+                            t.extend(v.w * if flip_winding_order { -1.0 } else { 1.0 })
+                                .into(),
+                        );
+                    }
+
+                    res.uvs.append(&mut uvs);
+                }
+            }
+        };
+
+        let xform = Mat4::IDENTITY;
+        for node in scene.nodes() {
+            iter_gltf_node_tree(&node, xform, &mut process_node);
+        }
+
+        res
+    }
+}
+
+/*#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Vertex {
     pub pos: glam::Vec3,
@@ -268,3 +426,4 @@ impl Model {
         glam::Mat4::from_cols_array_2d(&node.transform().matrix())
     }
 }
+*/
