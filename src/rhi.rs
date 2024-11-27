@@ -106,6 +106,7 @@ impl Device {
         desc: &dx::ResourceDesc,
         heap_props: &dx::HeapProperties,
         state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
         name: impl ToString,
     ) -> GpuResource {
         let name = name.to_string();
@@ -113,7 +114,13 @@ impl Device {
 
         let res = self
             .gpu
-            .create_committed_resource(heap_props, dx::HeapFlags::empty(), desc, state, None)
+            .create_committed_resource(
+                heap_props,
+                dx::HeapFlags::empty(),
+                desc,
+                state,
+                clear_value.as_ref(),
+            )
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
         GpuResource { res, name, uuid }
@@ -542,6 +549,8 @@ impl Texture {
         format: dx::Format,
         levels: u32,
         flags: dx::ResourceFlags,
+        state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
         name: impl ToString,
     ) -> Self {
         let name = name.to_string();
@@ -557,7 +566,8 @@ impl Texture {
         let res = device.create_resource(
             &desc,
             &dx::HeapProperties::default(),
-            dx::ResourceStates::Common,
+            state,
+            clear_value,
             name,
         );
 
@@ -568,7 +578,7 @@ impl Texture {
             height,
             levels,
             format,
-            state: RefCell::new(dx::ResourceStates::Common),
+            state: RefCell::new(state),
         }
     }
 
@@ -1086,7 +1096,7 @@ impl Buffer {
 
         let desc = dx::ResourceDesc::buffer(size).with_flags(flags);
 
-        let res = device.create_resource(&desc, &heap_props, state, name);
+        let res = device.create_resource(&desc, &heap_props, state, None, name);
 
         let vbv = if ty == BufferType::Vertex {
             Some(dx::VertexBufferView::new(

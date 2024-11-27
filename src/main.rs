@@ -50,6 +50,9 @@ pub struct Application {
 
     pub window_width: u32,
     pub window_height: u32,
+
+    pub depth_buffer: Rc<rhi::Texture>,
+    pub depth_view: rhi::TextureView,
 }
 
 impl Application {
@@ -157,7 +160,7 @@ impl Application {
             &device,
             &rhi::PipelineDesc {
                 line: false,
-                depth: false,
+                depth: true,
                 depth_format: dx::Format::D24UnormS8Uint,
                 op: rhi::DepthOp::Less,
                 wireframe: false,
@@ -168,6 +171,24 @@ impl Application {
                     (rhi::ShaderType::Pixel, ps),
                 ]),
             },
+        );
+
+        let depth_buffer = Rc::new(rhi::Texture::new(
+            &device,
+            width,
+            height,
+            dx::Format::D24UnormS8Uint,
+            1,
+            dx::ResourceFlags::AllowDepthStencil,
+            dx::ResourceStates::DepthWrite,
+            Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
+            "Depth Buffer",
+        ));
+        let depth_view = rhi::TextureView::new(
+            &device,
+            Rc::clone(&depth_buffer),
+            rhi::TextureViewType::DepthTarget,
+            None,
         );
 
         let camera = Camera {
@@ -211,6 +232,8 @@ impl Application {
             position_vertex_buffer,
             normal_vertex_buffer,
             index_buffer,
+            depth_buffer,
+            depth_view,
         }
     }
 
@@ -276,8 +299,9 @@ impl Application {
 
         list.set_image_barrier(texture, dx::ResourceStates::RenderTarget, None);
         list.clear_render_target(view, 0.0, 0.0, 0.0);
+        list.clear_depth_target(&self.depth_view);
 
-        list.set_render_targets(&[view], None);
+        list.set_render_targets(&[view], Some(&self.depth_view));
         list.set_viewport(self.window_width, self.window_height);
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
@@ -383,6 +407,24 @@ impl ApplicationHandler for Application {
                     self.cmd_queue.fence.get_current_value(),
                 );
                 self.curr_frame = 0;
+
+                self.depth_buffer = Rc::new(rhi::Texture::new(
+                    &self.device,
+                    size.width,
+                    size.height,
+                    dx::Format::D24UnormS8Uint,
+                    1,
+                    dx::ResourceFlags::AllowDepthStencil,
+                    dx::ResourceStates::DepthWrite,
+                    Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
+                    "Depth Buffer",
+                ));
+                self.depth_view = rhi::TextureView::new(
+                    &self.device,
+                    Rc::clone(&self.depth_buffer),
+                    rhi::TextureViewType::DepthTarget,
+                    None,
+                );
 
                 /*let Some(ref mut context) = self.base.context else {
                     return;
