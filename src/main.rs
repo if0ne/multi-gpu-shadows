@@ -44,7 +44,8 @@ pub struct Application {
     pub pso: rhi::GraphicsPipeline,
 
     pub model: Mesh,
-    pub vertex_buffer: rhi::Buffer,
+    pub position_vertex_buffer: rhi::Buffer,
+    pub normal_vertex_buffer: rhi::Buffer,
     pub index_buffer: rhi::Buffer,
 
     pub window_width: u32,
@@ -65,7 +66,7 @@ impl Application {
         let model = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
 
-        let mut vertex_staging = rhi::Buffer::new(
+        let mut position_vertex_staging = rhi::Buffer::new(
             &device,
             model.positions.len() * std::mem::size_of::<[f32; 3]>(),
             std::mem::size_of::<[f32; 3]>(),
@@ -75,8 +76,22 @@ impl Application {
         );
 
         {
-            let map = vertex_staging.map::<[f32; 3]>(None);
+            let map = position_vertex_staging.map::<[f32; 3]>(None);
             map.pointer.clone_from_slice(&model.positions);
+        }
+
+        let mut normal_vertex_staging = rhi::Buffer::new(
+            &device,
+            model.normals.len() * std::mem::size_of::<[f32; 3]>(),
+            std::mem::size_of::<[f32; 3]>(),
+            rhi::BufferType::Copy,
+            false,
+            format!("{} Vertex Buffer", "Check"),
+        );
+
+        {
+            let map = normal_vertex_staging.map::<[f32; 3]>(None);
+            map.pointer.clone_from_slice(&model.normals);
         }
 
         let mut index_staging = rhi::Buffer::new(
@@ -93,9 +108,18 @@ impl Application {
             map.pointer.clone_from_slice(&model.indices);
         }
 
-        let vertex_buffer = rhi::Buffer::new(
+        let position_vertex_buffer = rhi::Buffer::new(
             &device,
             model.positions.len() * size_of::<[f32; 3]>(),
+            size_of::<[f32; 3]>(),
+            rhi::BufferType::Vertex,
+            false,
+            "vertex",
+        );
+
+        let normal_vertex_buffer = rhi::Buffer::new(
+            &device,
+            model.normals.len() * size_of::<[f32; 3]>(),
             size_of::<[f32; 3]>(),
             rhi::BufferType::Vertex,
             false,
@@ -113,7 +137,8 @@ impl Application {
 
         let cmd_list = cmd_queue.get_command_buffer(&device);
         cmd_list.begin(&device);
-        cmd_list.copy_buffer_to_buffer(&vertex_buffer, &vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
         cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
         cmd_queue.push_cmd_buffer(cmd_list);
         let v = cmd_queue.execute();
@@ -183,7 +208,8 @@ impl Application {
             keys: HashMap::new(),
 
             model,
-            vertex_buffer,
+            position_vertex_buffer,
+            normal_vertex_buffer,
             index_buffer,
         }
     }
@@ -258,7 +284,7 @@ impl Application {
 
         list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
 
-        list.set_vertex_buffer(&self.vertex_buffer);
+        list.set_vertex_buffers(&[&self.position_vertex_buffer, &self.normal_vertex_buffer]);
         list.set_index_buffer(&self.index_buffer);
         list.draw(self.model.indices.len() as u32);
 

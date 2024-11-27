@@ -963,7 +963,7 @@ impl GraphicsPipeline {
                 &input_sematics_name[i as usize],
                 param_desc.semantic_index(),
                 format,
-                0,
+                i,
             );
 
             input_element_desc.push(input_element);
@@ -1363,9 +1363,13 @@ impl CommandBuffer {
         self.list.set_pipeline_state(&pipeline.pso);
     }
 
-    pub fn set_vertex_buffer(&self, buffer: &Buffer) {
-        self.list
-            .ia_set_vertex_buffers(0, &[buffer.vbv.expect("Expected vertex buffer")]);
+    pub fn set_vertex_buffers(&self, buffers: &[&Buffer]) {
+        let buffer_views = buffers
+            .iter()
+            .map(|b| b.vbv.expect("Expected vertex buffer"))
+            .collect::<Vec<_>>();
+
+        self.list.ia_set_vertex_buffers(0, &buffer_views);
     }
 
     pub fn set_index_buffer(&self, buffer: &Buffer) {
@@ -1408,7 +1412,7 @@ impl CommandBuffer {
     }
 
     pub fn draw(&self, count: u32) {
-        self.list.draw_instanced(count, 1, 0, 0);
+        self.list.draw_indexed_instanced(count, 1, 0, 0, 0);
     }
 
     pub fn copy_texture_to_texture(&self, dst: &Texture, src: &Texture) {

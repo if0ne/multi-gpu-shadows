@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use glam::{Mat4, Vec3, Vec4};
+use gltf::image;
 
 #[derive(Clone, Debug)]
 pub enum ImageSource {
@@ -69,10 +70,10 @@ impl Mesh {
         for image in gltf.images() {
             match image.source() {
                 image::Source::Uri { uri, .. } => {
-                    todo!()
+                    //todo!()
                 }
                 image::Source::View { view, .. } => {
-                    todo!()
+                    //todo!()
                 }
             }
         }
@@ -150,7 +151,7 @@ impl Mesh {
                             tangents: tangents.as_mut_slice(),
                         });
                     }
-                    
+
                     let submesh = Submesh {
                         index_count: indices.len() as u32,
                         start_index_location: res.indices.len() as u32,
