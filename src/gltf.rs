@@ -10,6 +10,8 @@ pub struct Mesh {
     pub uvs: Vec<[f32; 2]>,
     pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
+
+    pub sub_meshes: Vec<Submesh>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,6 +119,12 @@ impl Mesh {
                         });
                     }
 
+                    let submesh = Submesh {
+                        index_count: indices.len() as u32,
+                        start_index_location: res.indices.len() as u32,
+                        base_vertex_location: res.positions.len() as u32,
+                    };
+
                     {
                         let base_index = res.positions.len() as u32;
                         for i in &mut indices {
@@ -147,6 +155,8 @@ impl Mesh {
                     }
 
                     res.uvs.append(&mut uvs);
+
+                    res.sub_meshes.push(submesh);
                 }
             }
         };
