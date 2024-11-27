@@ -260,7 +260,7 @@ impl Application {
 
         list.set_vertex_buffer(&self.vertex_buffer);
         list.set_index_buffer(&self.index_buffer);
-        list.draw(self.model.positions.len() as u32);
+        list.draw(self.model.indices.len() as u32);
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
