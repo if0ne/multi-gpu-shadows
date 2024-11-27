@@ -2,6 +2,24 @@ use std::path::Path;
 
 use glam::{Mat4, Vec3, Vec4};
 
+#[derive(Clone, Debug)]
+pub enum ImageSource {
+    Path(std::path::PathBuf),
+    Data(Vec<u8>),
+}
+
+#[derive(Clone, Debug)]
+pub enum MaterialSlot {
+    Placeholder([f32; 4]),
+    Image(usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct Material {
+    diffuse: MaterialSlot,
+    normal: MaterialSlot,
+}
+
 #[derive(Clone, Default)]
 pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
@@ -12,6 +30,8 @@ pub struct Mesh {
     pub indices: Vec<u32>,
 
     pub sub_meshes: Vec<Submesh>,
+    pub materials: Vec<Material>,
+    pub images: Vec<ImageSource>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +39,7 @@ pub struct Submesh {
     pub index_count: u32,
     pub start_index_location: u32,
     pub base_vertex_location: u32,
+    pub material_idx: usize,
 }
 
 fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
@@ -37,13 +58,24 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
 
 impl Mesh {
     pub fn load(path: impl AsRef<Path>) -> Self {
-        let (gltf, buffers, _) = gltf::import(path).expect("Failed to open file");
+        let (gltf, buffers, images) = gltf::import(path).expect("Failed to open file");
 
         let scene = gltf
             .default_scene()
             .or_else(|| gltf.scenes().next())
             .expect("Failed to fetch scene");
         let mut res = Mesh::default();
+
+        for image in gltf.images() {
+            match image.source() {
+                image::Source::Uri { uri, .. } => {
+                    todo!()
+                }
+                image::Source::View { view, .. } => {
+                    todo!()
+                }
+            }
+        }
 
         let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
             if let Some(mesh) = node.mesh() {
@@ -118,11 +150,12 @@ impl Mesh {
                             tangents: tangents.as_mut_slice(),
                         });
                     }
-
+                    
                     let submesh = Submesh {
                         index_count: indices.len() as u32,
                         start_index_location: res.indices.len() as u32,
                         base_vertex_location: res.positions.len() as u32,
+                        material_idx: 0,
                     };
 
                     {
