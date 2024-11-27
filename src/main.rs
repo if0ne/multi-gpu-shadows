@@ -26,6 +26,13 @@ pub struct WindowContext {
     pub swapchain: rhi::Swapchain,
 }
 
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[repr(align(256))]
+pub struct Material {
+    diffuse: [f32; 4],
+}
+
 pub struct Application {
     pub device: Rc<rhi::Device>,
 
@@ -47,6 +54,7 @@ pub struct Application {
     pub position_vertex_buffer: rhi::Buffer,
     pub normal_vertex_buffer: rhi::Buffer,
     pub index_buffer: rhi::Buffer,
+    pub materials: Vec<rhi::Buffer>,
 
     pub window_width: u32,
     pub window_height: u32,
@@ -66,7 +74,7 @@ impl Application {
             .expect("Failed to create device"),
         );
 
-        let model = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
+        let model = Mesh::load("./assets/fantasy_island/scene.gltf");
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
 
         let mut position_vertex_staging = rhi::Buffer::new(
@@ -138,18 +146,48 @@ impl Application {
             "index",
         );
 
+        let materials = model
+            .materials
+            .iter()
+            .map(|m| {
+                let mut buffer = rhi::Buffer::new(
+                    &device,
+                    std::mem::size_of::<Material>(),
+                    0,
+                    rhi::BufferType::Constant,
+                    false,
+                    "Constant",
+                );
+
+                {
+                    let map = buffer.map::<Material>(None);
+                    match m.diffuse {
+                        gltf::MaterialSlot::Placeholder(mat) => {
+                            map.pointer.clone_from_slice(&[Material { diffuse: mat }])
+                        }
+                        gltf::MaterialSlot::Image(_) => todo!(),
+                    }
+                }
+
+                buffer.build_constant(&device);
+
+                buffer
+            })
+            .collect::<Vec<_>>();
+
         let cmd_list = cmd_queue.get_command_buffer(&device);
         cmd_list.begin(&device);
         cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
         cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
         cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
+
         cmd_queue.push_cmd_buffer(cmd_list);
         let v = cmd_queue.execute();
         cmd_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
-            &[rhi::BindingEntry::Cbv],
+            &[rhi::BindingEntry::Cbv, rhi::BindingEntry::Cbv],
             false,
         ));
 
@@ -234,6 +272,8 @@ impl Application {
             index_buffer,
             depth_buffer,
             depth_view,
+
+            materials,
         }
     }
 
@@ -310,7 +350,15 @@ impl Application {
 
         list.set_vertex_buffers(&[&self.position_vertex_buffer, &self.normal_vertex_buffer]);
         list.set_index_buffer(&self.index_buffer);
-        list.draw(self.model.indices.len() as u32);
+
+        for submesh in &self.model.sub_meshes {
+            list.set_graphics_cbv(&self.materials[submesh.material_idx], 1);
+            list.draw(
+                submesh.index_count,
+                submesh.start_index_location,
+                submesh.base_vertex_location as i32,
+            );
+        }
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 

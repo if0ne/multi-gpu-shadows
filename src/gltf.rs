@@ -17,8 +17,8 @@ pub enum MaterialSlot {
 
 #[derive(Clone, Debug)]
 pub struct Material {
-    diffuse: MaterialSlot,
-    normal: MaterialSlot,
+    pub diffuse: MaterialSlot,
+    pub normal: MaterialSlot,
 }
 
 #[derive(Clone, Default)]
@@ -77,6 +77,14 @@ impl Mesh {
                 }
             }
         }
+
+        res.materials = gltf
+            .materials()
+            .map(|m| Material {
+                diffuse: MaterialSlot::Placeholder(m.pbr_metallic_roughness().base_color_factor()),
+                normal: MaterialSlot::Placeholder([0.0, 0.0, 0.0, 0.0]),
+            })
+            .collect();
 
         let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
             if let Some(mesh) = node.mesh() {
@@ -156,18 +164,11 @@ impl Mesh {
                         index_count: indices.len() as u32,
                         start_index_location: res.indices.len() as u32,
                         base_vertex_location: res.positions.len() as u32,
-                        material_idx: 0,
+                        material_idx: prim.material().index().unwrap_or(0),
                     };
 
-                    {
-                        let base_index = res.positions.len() as u32;
-                        for i in &mut indices {
-                            *i += base_index;
-                        }
-
-                        res.indices.append(&mut indices);
-                        res.colors.append(&mut colors);
-                    }
+                    res.indices.append(&mut indices);
+                    res.colors.append(&mut colors);
 
                     for v in positions {
                         let pos = (xform * Vec3::from(v).extend(1.0)).truncate();

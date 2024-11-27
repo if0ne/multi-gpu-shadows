@@ -1421,8 +1421,9 @@ impl CommandBuffer {
         self.list.ia_set_primitive_topology(topo.as_dx());
     }
 
-    pub fn draw(&self, count: u32) {
-        self.list.draw_indexed_instanced(count, 1, 0, 0, 0);
+    pub fn draw(&self, count: u32, start_index: u32, base_vertex: i32) {
+        self.list
+            .draw_indexed_instanced(count, 1, start_index, base_vertex, 0);
     }
 
     pub fn copy_texture_to_texture(&self, dst: &Texture, src: &Texture) {
