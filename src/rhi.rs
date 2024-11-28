@@ -195,6 +195,10 @@ pub struct Device {
     pub dsv_heap: DescriptorHeap,
     pub shader_heap: DescriptorHeap,
     pub sampler_heap: DescriptorHeap,
+
+    pub gfx_queue: CommandQueue,
+    pub compute_queue: CommandQueue,
+    pub copy_queue: CommandQueue,
 }
 
 impl Device {
@@ -207,6 +211,10 @@ impl Device {
         let shader_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::CbvSrvUav, 1024);
         let sampler_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Sampler, 32);
 
+        let gfx_queue = CommandQueue::new(&device, dx::CommandListType::Direct);
+        let compute_queue = CommandQueue::new(&device, dx::CommandListType::Compute);
+        let copy_queue = CommandQueue::new(&device, dx::CommandListType::Copy);
+
         Self {
             id,
             adapter,
@@ -215,6 +223,10 @@ impl Device {
             dsv_heap,
             shader_heap,
             sampler_heap,
+
+            gfx_queue,
+            compute_queue,
+            copy_queue
         }
     }
 
@@ -327,6 +339,7 @@ pub struct Descriptor {
     pub gpu: dx::GpuDescriptorHandle,
 }
 
+#[derive(Debug)]
 pub struct Fence {
     pub fence: dx::Fence,
     pub value: AtomicU64,
@@ -372,11 +385,13 @@ impl Fence {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CommandAllocatorEntry {
     pub(crate) raw: dx::CommandAllocator,
     pub(crate) sync_point: u64,
 }
 
+#[derive(Debug)]
 pub struct CommandQueue {
     pub queue: Mutex<dx::CommandQueue>,
     pub ty: dx::CommandListType,
@@ -393,9 +408,8 @@ pub struct CommandQueue {
 }
 
 impl CommandQueue {
-    pub fn new(device: &Device, ty: dx::CommandListType) -> Self {
+    pub fn new(device: &dx::Device, ty: dx::CommandListType) -> Self {
         let queue = device
-            .gpu
             .create_command_queue(&dx::CommandQueueDesc::new(ty))
             .expect("Failed to create command queue");
 
@@ -409,7 +423,6 @@ impl CommandQueue {
         let cmd_allocators = (0..FRAMES_IN_FLIGHT)
             .map(|_| CommandAllocatorEntry {
                 raw: device
-                    .gpu
                     .create_command_allocator(ty)
                     .expect("Failed to create command allocator"),
                 sync_point: 0,
@@ -417,7 +430,6 @@ impl CommandQueue {
             .collect::<VecDeque<_>>();
 
         let cmd_list = device
-            .gpu
             .create_command_list(0, ty, &cmd_allocators[0].raw, PSO_NONE)
             .expect("Failed to create command list");
         cmd_list.close().expect("Failed to close list");
@@ -1322,6 +1334,7 @@ impl GeomTopology {
     }
 }
 
+#[derive(Debug)]
 pub struct CommandBuffer {
     pub(crate) ty: dx::CommandListType,
     pub(crate) list: dx::GraphicsCommandList,

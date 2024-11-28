@@ -40,8 +40,6 @@ pub struct Application {
 
     pub keys: HashMap<PhysicalKey, bool>,
 
-    pub cmd_queue: rhi::CommandQueue,
-
     pub camera_buffers: [rhi::Buffer; FRAMES_IN_FLIGHT],
     pub curr_frame: usize,
 
@@ -73,7 +71,6 @@ impl Application {
             .expect("Failed to fetch high perf gpu");
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
-        let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
 
         let mut position_vertex_staging = rhi::Buffer::new(
             &device,
@@ -173,15 +170,15 @@ impl Application {
             })
             .collect::<Vec<_>>();
 
-        let cmd_list = cmd_queue.get_command_buffer(&device);
+        let cmd_list = device.gfx_queue.get_command_buffer(&device);
         cmd_list.begin(&device);
         cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
         cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
         cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
 
-        cmd_queue.push_cmd_buffer(cmd_list);
-        let v = cmd_queue.execute();
-        cmd_queue.wait_on_cpu(v);
+        device.gfx_queue.push_cmd_buffer(cmd_list);
+        let v = device.gfx_queue.execute();
+        device.gfx_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -254,7 +251,6 @@ impl Application {
         Self {
             device_manager,
             device,
-            cmd_queue,
             camera_buffers,
             wnd_ctx: None,
             curr_frame: 0,
@@ -331,7 +327,7 @@ impl Application {
             return;
         };
 
-        let list = self.cmd_queue.get_command_buffer(&self.device);
+        let list = self.device.gfx_queue.get_command_buffer(&self.device);
         let (_, texture, view, sync_point) = &mut ctx.swapchain.resources[self.curr_frame];
 
         list.begin(&self.device);
@@ -361,11 +357,11 @@ impl Application {
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
-        self.cmd_queue.push_cmd_buffer(list);
-        *sync_point = self.cmd_queue.execute();
+        self.device.gfx_queue.push_cmd_buffer(list);
+        *sync_point = self.device.gfx_queue.execute();
         ctx.swapchain.present(true);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
-        self.cmd_queue
+        self.device.gfx_queue
             .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
     }
 
@@ -377,7 +373,7 @@ impl Application {
 
         let swapchain = rhi::Swapchain::new(
             &self.device,
-            &self.cmd_queue,
+            &self.device.gfx_queue,
             self.window_width,
             self.window_height,
             hwnd,
@@ -393,7 +389,9 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
-        self.cmd_queue.wait_idle();
+        self.device.gfx_queue.wait_idle();
+        self.device.compute_queue.wait_idle();
+        self.device.copy_queue.wait_idle();
     }
 }
 
@@ -446,12 +444,12 @@ impl ApplicationHandler for Application {
                 self.window_width = size.width;
                 self.window_height = size.height;
 
-                self.cmd_queue.wait_idle();
+                self.device.gfx_queue.wait_idle();
                 context.swapchain.resize(
                     &self.device,
                     size.width,
                     size.height,
-                    self.cmd_queue.fence.get_current_value(),
+                    self.device.gfx_queue.fence.get_current_value(),
                 );
                 self.curr_frame = 0;
 
