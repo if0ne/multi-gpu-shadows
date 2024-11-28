@@ -1,4 +1,5 @@
 use std::{
+    any::TypeId,
     cell::RefCell,
     collections::{HashMap, VecDeque},
     ffi::CString,
@@ -1095,13 +1096,108 @@ pub struct Buffer {
 
     pub srv: Option<Descriptor>,
     pub uav: Option<Descriptor>,
-    pub cbv: Option<Descriptor>,
+    pub cbv: Vec<Descriptor>,
 
     pub vbv: Option<dx::VertexBufferView>,
     pub ibv: Option<dx::IndexBufferView>,
+
+    pub inner_ty: TypeId,
 }
 
 impl Buffer {
+    pub fn constant<T: Clone + 'static>(
+        device: &Device,
+        count: usize,
+        name: impl ToString,
+    ) -> Self {
+        const { assert!(align_of::<T>() == 256) };
+
+        let size = size_of::<T>() * count;
+        let mut buffer = Self::new(
+            device,
+            size,
+            0,
+            BufferType::Constant,
+            false,
+            name,
+            TypeId::of::<T>(),
+        );
+        buffer.build_constant(device, count, size_of::<T>());
+
+        buffer
+    }
+
+    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
+        let size = size_of::<T>();
+
+        const { assert!(align_of::<T>() == 256) };
+        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
+        debug_assert!(size * index < self.size);
+
+        let mapped = self.map::<T>(Some(index * size..(index + 1) * size));
+        mapped.pointer.clone_from_slice(std::slice::from_ref(data));
+    }
+
+    pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
+        const { assert!(align_of::<T>() == 256) };
+        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
+
+        let mapped = self.map::<T>(None);
+        mapped.pointer.clone_from_slice(data);
+    }
+
+    pub fn vertex<T: Clone + 'static>(device: &Device, count: usize, name: impl ToString) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            device,
+            size,
+            size_of::<T>(),
+            BufferType::Vertex,
+            false,
+            name,
+            TypeId::of::<T>(),
+        )
+    }
+
+    pub fn index_u16(device: &Device, count: usize, name: impl ToString) -> Self {
+        Self::new(
+            device,
+            size_of::<u16>() * count,
+            size_of::<u16>(),
+            BufferType::Index,
+            false,
+            name,
+            TypeId::of::<u16>(),
+        )
+    }
+
+    pub fn index_u32(device: &Device, count: usize, name: impl ToString) -> Self {
+        Self::new(
+            device,
+            size_of::<u32>() * count,
+            size_of::<u32>(),
+            BufferType::Index,
+            false,
+            name,
+            TypeId::of::<u32>(),
+        )
+    }
+
+    pub fn copy<T: Clone + 'static>(device: &Device, count: usize, name: impl ToString) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            device,
+            size,
+            0,
+            BufferType::Copy,
+            false,
+            name,
+            TypeId::of::<T>(),
+        )
+    }
+
     pub fn new(
         device: &Device,
         size: usize,
@@ -1109,6 +1205,7 @@ impl Buffer {
         ty: BufferType,
         readback: bool,
         name: impl ToString,
+        inner_ty: TypeId,
     ) -> Self {
         let heap_props = match ty {
             BufferType::Constant | BufferType::Copy => dx::HeapProperties::upload(),
@@ -1164,23 +1261,28 @@ impl Buffer {
             stride,
             srv: None,
             uav: None,
-            cbv: None,
+            cbv: vec![],
             vbv,
             ibv,
+            inner_ty,
         }
     }
 
-    pub fn build_constant(&mut self, device: &Device) {
-        if self.cbv.is_some() {
+    pub fn build_constant(&mut self, device: &Device, count: usize, object_size: usize) {
+        if !self.cbv.is_empty() {
             return;
         }
 
-        let d = device.shader_heap.alloc();
-        let desc =
-            dx::ConstantBufferViewDesc::new(self.res.res.get_gpu_virtual_address(), self.size);
-        device.gpu.create_constant_buffer_view(Some(&desc), d.cpu);
+        for i in 0..count {
+            let d = device.shader_heap.alloc();
+            let desc = dx::ConstantBufferViewDesc::new(
+                self.res.res.get_gpu_virtual_address() + (i * object_size) as u64,
+                object_size,
+            );
+            device.gpu.create_constant_buffer_view(Some(&desc), d.cpu);
 
-        self.cbv = Some(d);
+            self.cbv.push(d);
+        }
     }
 
     pub fn build_storage(&mut self, device: &Device) {
@@ -1431,11 +1533,9 @@ impl CommandBuffer {
             .set_graphics_root_descriptor_table(index as u32, view.handle.gpu);
     }
 
-    pub fn set_graphics_cbv(&self, buffer: &Buffer, index: usize) {
-        self.list.set_graphics_root_descriptor_table(
-            index as u32,
-            buffer.cbv.as_ref().expect("Expected constant buffer").gpu,
-        );
+    pub fn set_graphics_cbv(&self, desc: &Descriptor, index: usize) {
+        self.list
+            .set_graphics_root_descriptor_table(index as u32, desc.gpu);
     }
 
     pub fn set_graphics_sampler(&self, sampler: &Sampler, index: usize) {

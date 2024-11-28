@@ -29,7 +29,7 @@ pub struct WindowContext {
 #[derive(Clone, Debug)]
 #[repr(C)]
 #[repr(align(256))]
-pub struct Material {
+pub struct GpuMaterial {
     diffuse: [f32; 4],
 }
 
@@ -40,7 +40,7 @@ pub struct Application {
 
     pub keys: HashMap<PhysicalKey, bool>,
 
-    pub camera_buffers: [rhi::Buffer; FRAMES_IN_FLIGHT],
+    pub camera_buffers: rhi::Buffer,
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
@@ -54,7 +54,7 @@ pub struct Application {
     pub position_vertex_buffer: rhi::Buffer,
     pub normal_vertex_buffer: rhi::Buffer,
     pub index_buffer: rhi::Buffer,
-    pub materials: Vec<rhi::Buffer>,
+    pub materials: rhi::Buffer,
 
     pub window_width: u32,
     pub window_height: u32,
@@ -72,12 +72,9 @@ impl Application {
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
 
-        let mut position_vertex_staging = rhi::Buffer::new(
+        let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
             &device,
-            model.positions.len() * std::mem::size_of::<[f32; 3]>(),
-            std::mem::size_of::<[f32; 3]>(),
-            rhi::BufferType::Copy,
-            false,
+            model.positions.len(),
             format!("{} Vertex Buffer", "Check"),
         );
 
@@ -86,12 +83,9 @@ impl Application {
             map.pointer.clone_from_slice(&model.positions);
         }
 
-        let mut normal_vertex_staging = rhi::Buffer::new(
+        let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
             &device,
-            model.normals.len() * std::mem::size_of::<[f32; 3]>(),
-            std::mem::size_of::<[f32; 3]>(),
-            rhi::BufferType::Copy,
-            false,
+            model.normals.len(),
             format!("{} Vertex Buffer", "Check"),
         );
 
@@ -100,12 +94,9 @@ impl Application {
             map.pointer.clone_from_slice(&model.normals);
         }
 
-        let mut index_staging = rhi::Buffer::new(
+        let mut index_staging = rhi::Buffer::copy::<u32>(
             &device,
-            model.indices.len() * std::mem::size_of::<u32>(),
-            std::mem::size_of::<u32>(),
-            rhi::BufferType::Copy,
-            false,
+            model.indices.len(),
             format!("{} Index Buffer", "check"),
         );
 
@@ -114,61 +105,32 @@ impl Application {
             map.pointer.clone_from_slice(&model.indices);
         }
 
-        let position_vertex_buffer = rhi::Buffer::new(
+        let position_vertex_buffer =
+            rhi::Buffer::vertex::<[f32; 3]>(&device, model.positions.len(), "Vertex");
+
+        let normal_vertex_buffer =
+            rhi::Buffer::vertex::<[f32; 3]>(&device, model.normals.len(), "Vertex");
+
+        let index_buffer = rhi::Buffer::index_u32(&device, model.indices.len(), "Index");
+
+        let mut materials = rhi::Buffer::constant::<GpuMaterial>(
             &device,
-            model.positions.len() * size_of::<[f32; 3]>(),
-            size_of::<[f32; 3]>(),
-            rhi::BufferType::Vertex,
-            false,
-            "vertex",
+            model.materials.len(),
+            "Materials Buffer",
         );
 
-        let normal_vertex_buffer = rhi::Buffer::new(
-            &device,
-            model.normals.len() * size_of::<[f32; 3]>(),
-            size_of::<[f32; 3]>(),
-            rhi::BufferType::Vertex,
-            false,
-            "vertex",
-        );
+        {
+            let data = model
+                .materials
+                .iter()
+                .map(|m| match m.diffuse {
+                    gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
+                    gltf::MaterialSlot::Image(_) => todo!(),
+                })
+                .collect::<Vec<_>>();
 
-        let index_buffer = rhi::Buffer::new(
-            &device,
-            model.indices.len() * size_of::<u32>(),
-            size_of::<u32>(),
-            rhi::BufferType::Index,
-            false,
-            "index",
-        );
-
-        let materials = model
-            .materials
-            .iter()
-            .map(|m| {
-                let mut buffer = rhi::Buffer::new(
-                    &device,
-                    std::mem::size_of::<Material>(),
-                    0,
-                    rhi::BufferType::Constant,
-                    false,
-                    "Constant",
-                );
-
-                {
-                    let map = buffer.map::<Material>(None);
-                    match m.diffuse {
-                        gltf::MaterialSlot::Placeholder(mat) => {
-                            map.pointer.clone_from_slice(&[Material { diffuse: mat }])
-                        }
-                        gltf::MaterialSlot::Image(_) => todo!(),
-                    }
-                }
-
-                buffer.build_constant(&device);
-
-                buffer
-            })
-            .collect::<Vec<_>>();
+            materials.write_all(&data);
+        }
 
         let cmd_list = device.gfx_queue.get_command_buffer(&device);
         cmd_list.begin(&device);
@@ -234,19 +196,8 @@ impl Application {
 
         let controller = FpsController::new(0.003, 1.0);
 
-        let camera_buffers = std::array::from_fn(|_| {
-            let mut buffer = rhi::Buffer::new(
-                &device,
-                size_of::<GpuCamera>(),
-                0,
-                rhi::BufferType::Constant,
-                false,
-                "Camera buffer",
-            );
-            buffer.build_constant(&device);
-
-            buffer
-        });
+        let camera_buffers =
+            rhi::Buffer::constant::<GpuCamera>(&device, FRAMES_IN_FLIGHT, "Camera Buffers");
 
         Self {
             device_manager,
@@ -312,14 +263,14 @@ impl Application {
                 .update_position(0.16, &mut self.camera, direction.normalize());
         }
 
-        let buffer = &mut self.camera_buffers[self.curr_frame];
-        let mapped = buffer.map::<GpuCamera>(None);
-
-        mapped.pointer[0] = GpuCamera {
-            world: glam::Mat4::from_translation(vec3(0.0, 0.0, 1.0)),
-            view: self.camera.view,
-            proj: self.camera.proj(),
-        };
+        self.camera_buffers.write(
+            self.curr_frame,
+            &GpuCamera {
+                world: glam::Mat4::from_translation(vec3(0.0, 0.0, 1.0)),
+                view: self.camera.view,
+                proj: self.camera.proj(),
+            },
+        );
     }
 
     pub fn render(&mut self) {
@@ -341,13 +292,13 @@ impl Application {
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
 
-        list.set_graphics_cbv(&self.camera_buffers[self.curr_frame], 0);
+        list.set_graphics_cbv(&self.camera_buffers.cbv[self.curr_frame], 0);
 
         list.set_vertex_buffers(&[&self.position_vertex_buffer, &self.normal_vertex_buffer]);
         list.set_index_buffer(&self.index_buffer);
 
         for submesh in &self.model.sub_meshes {
-            list.set_graphics_cbv(&self.materials[submesh.material_idx], 1);
+            list.set_graphics_cbv(&self.materials.cbv[submesh.material_idx], 1);
             list.draw(
                 submesh.index_count,
                 submesh.start_index_location,
