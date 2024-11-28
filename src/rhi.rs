@@ -226,7 +226,7 @@ impl Device {
 
             gfx_queue,
             compute_queue,
-            copy_queue
+            copy_queue,
         }
     }
 
@@ -346,9 +346,8 @@ pub struct Fence {
 }
 
 impl Fence {
-    pub fn new(device: &Device) -> Self {
+    pub fn new(device: &dx::Device) -> Self {
         let fence = device
-            .gpu
             .create_fence(0, dx::FenceFlags::empty())
             .expect("Failed to create fence");
 
@@ -466,7 +465,7 @@ impl CommandQueue {
     }
 
     pub fn wait_idle(&self) {
-        let value = self.signal();
+        let value = self.signal_queue();
         self.wait_on_cpu(value);
     }
 
@@ -487,7 +486,7 @@ impl CommandQueue {
             .collect::<Vec<_>>();
 
         self.queue.lock().execute_command_lists(&lists);
-        let fence_value = self.signal();
+        let fence_value = self.signal_queue();
 
         let allocators = cmd_buffers.into_iter().map(|mut buffer| {
             buffer.allocator.sync_point = fence_value;
@@ -551,13 +550,18 @@ impl CommandQueue {
         }
     }
 
-    fn signal(&self) -> u64 {
-        let value = self.fence.inc_value();
+    pub fn signal(&self, fence: &Fence) -> u64 {
+        let value = fence.inc_value();
         self.queue
             .lock()
-            .signal(&self.fence.fence, value)
+            .signal(&fence.fence, value)
             .expect("Failed to signal");
+
         value
+    }
+
+    fn signal_queue(&self) -> u64 {
+        self.signal(&self.fence)
     }
 
     fn is_fence_complete(&self, value: u64) -> bool {
@@ -641,18 +645,12 @@ pub enum TextureViewType {
 }
 
 pub struct TextureView {
-    pub parent: Rc<Texture>,
     pub ty: TextureViewType,
     pub handle: Descriptor,
 }
 
 impl TextureView {
-    pub fn new(
-        device: &Device,
-        parent: Rc<Texture>,
-        ty: TextureViewType,
-        mip: Option<u32>,
-    ) -> Self {
+    pub fn new(device: &Device, parent: &Texture, ty: TextureViewType, mip: Option<u32>) -> Self {
         let handle = match ty {
             TextureViewType::RenderTarget => {
                 let handle = device.rtv_heap.alloc();
@@ -711,22 +709,22 @@ impl TextureView {
             }
         };
 
-        Self { parent, ty, handle }
+        Self { ty, handle }
     }
 }
 
 pub struct Swapchain {
     pub swapchain: dx::Swapchain1,
     pub hwnd: NonZero<isize>,
-    pub resources: Vec<(dx::Resource, Rc<Texture>, TextureView, u64)>,
+    pub resources: Vec<(dx::Resource, Texture, TextureView, u64)>,
     pub width: u32,
     pub height: u32,
 }
 
 impl Swapchain {
     pub fn new(
+        factory: &dx::Factory4,
         device: &Device,
-        present_queue: &CommandQueue,
         width: u32,
         height: u32,
         hwnd: NonZero<isize>,
@@ -738,10 +736,9 @@ impl Swapchain {
             .with_scaling(dx::Scaling::None)
             .with_swap_effect(dx::SwapEffect::FlipSequential);
 
-        let swapchain = device
-            .factory
+        let swapchain = factory
             .create_swapchain_for_hwnd(
-                &*present_queue.queue.lock(),
+                &*device.gfx_queue.queue.lock(),
                 hwnd,
                 &desc,
                 None,
@@ -787,7 +784,7 @@ impl Swapchain {
                 .gpu
                 .create_render_target_view(Some(&res), None, descriptor.cpu);
 
-            let texture = Rc::new(Texture {
+            let texture = Texture {
                 res: GpuResource {
                     res: res.clone(),
                     name: "Swapchain Image".to_string(),
@@ -799,10 +796,9 @@ impl Swapchain {
                 levels: 1,
                 format: dx::Format::Rgba8Unorm,
                 state: RefCell::new(dx::ResourceStates::Common),
-            });
+            };
 
             let view = TextureView {
-                parent: Rc::clone(&texture),
                 ty: TextureViewType::RenderTarget,
                 handle: descriptor,
             };

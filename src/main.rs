@@ -59,7 +59,7 @@ pub struct Application {
     pub window_width: u32,
     pub window_height: u32,
 
-    pub depth_buffer: Rc<rhi::Texture>,
+    pub depth_buffer: rhi::Texture,
     pub depth_view: rhi::TextureView,
 }
 
@@ -206,7 +206,7 @@ impl Application {
             },
         );
 
-        let depth_buffer = Rc::new(rhi::Texture::new(
+        let depth_buffer = rhi::Texture::new(
             &device,
             width,
             height,
@@ -216,10 +216,10 @@ impl Application {
             dx::ResourceStates::DepthWrite,
             Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
             "Depth Buffer",
-        ));
+        );
         let depth_view = rhi::TextureView::new(
             &device,
-            Rc::clone(&depth_buffer),
+            &depth_buffer,
             rhi::TextureViewType::DepthTarget,
             None,
         );
@@ -361,7 +361,8 @@ impl Application {
         *sync_point = self.device.gfx_queue.execute();
         ctx.swapchain.present(true);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
-        self.device.gfx_queue
+        self.device
+            .gfx_queue
             .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
     }
 
@@ -372,8 +373,8 @@ impl Application {
         let hwnd = hwnd.hwnd;
 
         let swapchain = rhi::Swapchain::new(
+            &self.device_manager.factory,
             &self.device,
-            &self.device.gfx_queue,
             self.window_width,
             self.window_height,
             hwnd,
@@ -453,7 +454,7 @@ impl ApplicationHandler for Application {
                 );
                 self.curr_frame = 0;
 
-                self.depth_buffer = Rc::new(rhi::Texture::new(
+                self.depth_buffer = rhi::Texture::new(
                     &self.device,
                     size.width,
                     size.height,
@@ -463,10 +464,10 @@ impl ApplicationHandler for Application {
                     dx::ResourceStates::DepthWrite,
                     Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
                     "Depth Buffer",
-                ));
+                );
                 self.depth_view = rhi::TextureView::new(
                     &self.device,
-                    Rc::clone(&self.depth_buffer),
+                    &self.depth_buffer,
                     rhi::TextureViewType::DepthTarget,
                     None,
                 );
