@@ -252,7 +252,12 @@ impl Device {
             )
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
-        GpuResource { res, name, uuid }
+        GpuResource {
+            device_id: self.id,
+            res,
+            name,
+            uuid,
+        }
     }
 }
 
@@ -572,6 +577,7 @@ impl CommandQueue {
 
 #[derive(Debug)]
 pub struct GpuResource {
+    pub device_id: DeviceMask,
     pub res: dx::Resource,
     pub name: String,
     pub uuid: u64,
@@ -1087,6 +1093,131 @@ pub enum BufferType {
 
 #[derive(Debug)]
 pub struct Buffer {
+    pub buffers: Vec<DeviceBuffer>,
+}
+
+impl Buffer {
+    pub fn new(
+        size: usize,
+        stride: usize,
+        ty: BufferType,
+        readback: bool,
+        name: impl AsRef<str>,
+        inner_ty: TypeId,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| DeviceBuffer::new(&d, size, stride, ty, readback, name.as_ref(), inner_ty))
+                .collect(),
+        }
+    }
+
+    pub fn get_buffer(&self, device_id: DeviceMask) -> Option<&'_ DeviceBuffer> {
+        self.buffers.iter().find(|b| b.res.device_id.eq(&device_id))
+    }
+
+    pub fn constant<T: Clone + 'static>(
+        count: usize,
+        name: impl AsRef<str>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        const { assert!(align_of::<T>() == 256) };
+
+        let size = size_of::<T>() * count;
+        let mut buffer = Self::new(
+            size,
+            0,
+            BufferType::Constant,
+            false,
+            name,
+            TypeId::of::<T>(),
+            devices,
+        );
+
+        for (d, b) in devices.iter().zip(buffer.buffers.iter_mut()) {
+            b.build_constant(d, count, size_of::<T>());
+        }
+
+        buffer
+    }
+
+    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
+        self.buffers
+            .iter_mut()
+            .for_each(|buffer| buffer.write(index, data));
+    }
+
+    pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
+        self.buffers
+            .iter_mut()
+            .for_each(|buffer| buffer.write_all(data));
+    }
+
+    pub fn vertex<T: Clone + 'static>(
+        count: usize,
+        name: impl AsRef<str>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            size,
+            size_of::<T>(),
+            BufferType::Vertex,
+            false,
+            name,
+            TypeId::of::<T>(),
+            devices,
+        )
+    }
+
+    pub fn index_u16(count: usize, name: impl AsRef<str>, devices: &[&Arc<Device>]) -> Self {
+        Self::new(
+            size_of::<u16>() * count,
+            size_of::<u16>(),
+            BufferType::Index,
+            false,
+            name,
+            TypeId::of::<u16>(),
+            devices,
+        )
+    }
+
+    pub fn index_u32(count: usize, name: impl AsRef<str>, devices: &[&Arc<Device>]) -> Self {
+        Self::new(
+            size_of::<u32>() * count,
+            size_of::<u32>(),
+            BufferType::Index,
+            false,
+            name,
+            TypeId::of::<u32>(),
+            devices,
+        )
+    }
+
+    pub fn copy<T: Clone + 'static>(
+        count: usize,
+        name: impl AsRef<str>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            size,
+            0,
+            BufferType::Copy,
+            false,
+            name,
+            TypeId::of::<T>(),
+            devices,
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceBuffer {
     pub res: GpuResource,
     pub ty: BufferType,
     pub state: RefCell<dx::ResourceStates>,
@@ -1104,107 +1235,14 @@ pub struct Buffer {
     pub inner_ty: TypeId,
 }
 
-impl Buffer {
-    pub fn constant<T: Clone + 'static>(
-        device: &Device,
-        count: usize,
-        name: impl ToString,
-    ) -> Self {
-        const { assert!(align_of::<T>() == 256) };
-
-        let size = size_of::<T>() * count;
-        let mut buffer = Self::new(
-            device,
-            size,
-            0,
-            BufferType::Constant,
-            false,
-            name,
-            TypeId::of::<T>(),
-        );
-        buffer.build_constant(device, count, size_of::<T>());
-
-        buffer
-    }
-
-    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
-        let size = size_of::<T>();
-
-        const { assert!(align_of::<T>() == 256) };
-        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
-        debug_assert!(size * index < self.size);
-
-        let mapped = self.map::<T>(Some(index * size..(index + 1) * size));
-        mapped.pointer.clone_from_slice(std::slice::from_ref(data));
-    }
-
-    pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
-        const { assert!(align_of::<T>() == 256) };
-        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
-
-        let mapped = self.map::<T>(None);
-        mapped.pointer.clone_from_slice(data);
-    }
-
-    pub fn vertex<T: Clone + 'static>(device: &Device, count: usize, name: impl ToString) -> Self {
-        let size = size_of::<T>() * count;
-
-        Self::new(
-            device,
-            size,
-            size_of::<T>(),
-            BufferType::Vertex,
-            false,
-            name,
-            TypeId::of::<T>(),
-        )
-    }
-
-    pub fn index_u16(device: &Device, count: usize, name: impl ToString) -> Self {
-        Self::new(
-            device,
-            size_of::<u16>() * count,
-            size_of::<u16>(),
-            BufferType::Index,
-            false,
-            name,
-            TypeId::of::<u16>(),
-        )
-    }
-
-    pub fn index_u32(device: &Device, count: usize, name: impl ToString) -> Self {
-        Self::new(
-            device,
-            size_of::<u32>() * count,
-            size_of::<u32>(),
-            BufferType::Index,
-            false,
-            name,
-            TypeId::of::<u32>(),
-        )
-    }
-
-    pub fn copy<T: Clone + 'static>(device: &Device, count: usize, name: impl ToString) -> Self {
-        let size = size_of::<T>() * count;
-
-        Self::new(
-            device,
-            size,
-            0,
-            BufferType::Copy,
-            false,
-            name,
-            TypeId::of::<T>(),
-        )
-    }
-
+impl DeviceBuffer {
     pub fn new(
         device: &Device,
         size: usize,
         stride: usize,
         ty: BufferType,
         readback: bool,
-        name: impl ToString,
+        name: &str,
         inner_ty: TypeId,
     ) -> Self {
         let heap_props = match ty {
@@ -1266,6 +1304,25 @@ impl Buffer {
             ibv,
             inner_ty,
         }
+    }
+
+    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
+        let size = size_of::<T>();
+
+        const { assert!(align_of::<T>() == 256) };
+        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
+        debug_assert!(size * index < self.size);
+
+        let mapped = self.map::<T>(Some(index * size..(index + 1) * size));
+        mapped.pointer.clone_from_slice(std::slice::from_ref(data));
+    }
+
+    pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
+        const { assert!(align_of::<T>() == 256) };
+        debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
+
+        let mapped = self.map::<T>(None);
+        mapped.pointer.clone_from_slice(data);
     }
 
     pub fn build_constant(&mut self, device: &Device, count: usize, object_size: usize) {
@@ -1350,7 +1407,7 @@ impl Buffer {
 }
 
 pub struct BufferMap<'a, T> {
-    buffer: &'a Buffer,
+    buffer: &'a DeviceBuffer,
     range: Option<Range<usize>>,
     pub pointer: &'a mut [T],
 }
@@ -1456,7 +1513,7 @@ impl CommandBuffer {
         self.list.om_set_render_targets(&rtvs, false, dsv);
     }
 
-    pub fn set_buffer_barrier(&self, buffer: &Buffer, state: dx::ResourceStates) {
+    pub fn set_buffer_barrier(&self, buffer: &DeviceBuffer, state: dx::ResourceStates) {
         let mut old_state = buffer.state.borrow_mut();
 
         if *old_state == state {
@@ -1515,7 +1572,7 @@ impl CommandBuffer {
         self.list.set_pipeline_state(&pipeline.pso);
     }
 
-    pub fn set_vertex_buffers(&self, buffers: &[&Buffer]) {
+    pub fn set_vertex_buffers(&self, buffers: &[&DeviceBuffer]) {
         let buffer_views = buffers
             .iter()
             .map(|b| b.vbv.expect("Expected vertex buffer"))
@@ -1524,7 +1581,7 @@ impl CommandBuffer {
         self.list.ia_set_vertex_buffers(0, &buffer_views);
     }
 
-    pub fn set_index_buffer(&self, buffer: &Buffer) {
+    pub fn set_index_buffer(&self, buffer: &DeviceBuffer) {
         self.list
             .ia_set_index_buffer(Some(&buffer.ibv.expect("Expected index buffer")));
     }
@@ -1570,7 +1627,7 @@ impl CommandBuffer {
         self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 
-    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &Buffer) {
+    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &DeviceBuffer) {
         let desc = dst.res.res.get_desc();
         let mut footprints = vec![dx::PlacedSubresourceFootprint::default(); dst.levels as usize];
         let mut num_rows = vec![Default::default(); dst.levels as usize];
@@ -1595,6 +1652,13 @@ impl CommandBuffer {
     }
 
     pub fn copy_buffer_to_buffer(&self, dst: &Buffer, src: &Buffer) {
+        let dst = dst
+            .get_buffer(self.device_id)
+            .expect("Failed to get dst buffer");
+        let src = src
+            .get_buffer(self.device_id)
+            .expect("Failed to get dst buffer");
+
         self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 }

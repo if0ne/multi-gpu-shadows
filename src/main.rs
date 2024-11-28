@@ -75,96 +75,63 @@ impl Application {
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
 
-        let gpu_mesh = GpuMesh::new(
-            &model,
-            &[(&device, |device, mesh| {
-                let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-                    &device,
-                    mesh.positions.len(),
-                    format!("{} Vertex Buffer", "Check"),
-                );
-
-                {
-                    let map = position_vertex_staging.map::<[f32; 3]>(None);
-                    map.pointer.clone_from_slice(&mesh.positions);
-                }
-
-                let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-                    &device,
-                    mesh.normals.len(),
-                    format!("{} Vertex Buffer", "Check"),
-                );
-
-                {
-                    let map = normal_vertex_staging.map::<[f32; 3]>(None);
-                    map.pointer.clone_from_slice(&mesh.normals);
-                }
-
-                let mut index_staging = rhi::Buffer::copy::<u32>(
-                    &device,
-                    mesh.indices.len(),
-                    format!("{} Index Buffer", "check"),
-                );
-
-                {
-                    let map = index_staging.map::<u32>(None);
-                    map.pointer.clone_from_slice(&mesh.indices);
-                }
-
-                let position_vertex_buffer =
-                    rhi::Buffer::vertex::<[f32; 3]>(&device, mesh.positions.len(), "Vertex");
-
-                let normal_vertex_buffer =
-                    rhi::Buffer::vertex::<[f32; 3]>(&device, mesh.normals.len(), "Vertex");
-
-                let index_buffer = rhi::Buffer::index_u32(&device, mesh.indices.len(), "Index");
-
-                let mut materials = rhi::Buffer::constant::<GpuMaterial>(
-                    &device,
-                    mesh.materials.len(),
-                    "Materials Buffer",
-                );
-
-                {
-                    let data = mesh
-                        .materials
-                        .iter()
-                        .map(|m| match m.diffuse {
-                            gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
-                            gltf::MaterialSlot::Image(_) => todo!(),
-                        })
-                        .collect::<Vec<_>>();
-
-                    materials.write_all(&data);
-                }
-
-                let cmd_list = device.gfx_queue.get_command_buffer(&device);
-                cmd_list.begin(&device);
-                cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
-                cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
-                cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
-
-                device.gfx_queue.push_cmd_buffer(cmd_list);
-                let v = device.gfx_queue.execute();
-                device.gfx_queue.wait_on_cpu(v);
-
-                GpuDeviceMesh {
-                    device_id: device.id,
-                    pos_vb: position_vertex_buffer,
-                    normal_vb: Some(normal_vertex_buffer),
-                    uv_vb: None,
-                    tangent_vb: None,
-                    ib: index_buffer,
-                    materials,
-                    transform: rhi::Buffer::constant::<GpuTransform>(
-                        &device,
-                        FRAMES_IN_FLIGHT,
-                        "Transforma Matrix",
-                    ),
-                    sub_meshes: mesh.sub_meshes.clone(),
-                }
-            })],
+        let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
+            model.positions.len(),
+            format!("{} Vertex Buffer", "Check"),
+            &[&device],
         );
+        position_vertex_staging.write_all(&model.positions);
+
+        let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
+            model.normals.len(),
+            format!("{} Vertex Buffer", "Check"),
+            &[&device],
+        );
+        normal_vertex_staging.write_all(&model.normals);
+
+        let mut index_staging = rhi::Buffer::copy::<u32>(
+            model.indices.len(),
+            format!("{} Index Buffer", "check"),
+            &[&device],
+        );
+        index_staging.write_all(&model.indices);
+
+        let position_vertex_buffer =
+            rhi::Buffer::vertex::<[f32; 3]>(model.positions.len(), "Vertex", &[&device]);
+
+        let normal_vertex_buffer =
+            rhi::Buffer::vertex::<[f32; 3]>(model.normals.len(), "Vertex", &[&device]);
+
+        let index_buffer = rhi::Buffer::index_u32(model.indices.len(), "Index", &[&device]);
+
+        let mut materials = rhi::Buffer::constant::<GpuMaterial>(
+            model.materials.len(),
+            "Materials Buffer",
+            &[&device],
+        );
+
+        {
+            let data = model
+                .materials
+                .iter()
+                .map(|m| match m.diffuse {
+                    gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
+                    gltf::MaterialSlot::Image(_) => todo!(),
+                })
+                .collect::<Vec<_>>();
+
+            materials.write_all(&data);
+        }
+
+        let cmd_list = device.gfx_queue.get_command_buffer(&device);
+        cmd_list.begin(&device);
+        cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
+        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
+
+        device.gfx_queue.push_cmd_buffer(cmd_list);
+        let v = device.gfx_queue.execute();
+        device.gfx_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -221,7 +188,7 @@ impl Application {
         let controller = FpsController::new(0.003, 1.0);
 
         let camera_buffers =
-            rhi::Buffer::constant::<GpuCamera>(&device, FRAMES_IN_FLIGHT, "Camera Buffers");
+            rhi::Buffer::constant::<GpuCamera>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
 
         Self {
             device_manager,

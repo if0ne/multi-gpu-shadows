@@ -233,40 +233,15 @@ impl<'a> mikktspace::Geometry for TangentCalcContext<'a> {
 }
 
 #[derive(Debug)]
-pub struct GpuDeviceMesh {
-    pub device_id: rhi::DeviceMask,
+pub struct GpuMesh {
+    pub pos_vb: rhi::DeviceBuffer,
+    pub normal_vb: Option<rhi::DeviceBuffer>,
+    pub uv_vb: Option<rhi::DeviceBuffer>,
+    pub tangent_vb: Option<rhi::DeviceBuffer>,
 
-    pub pos_vb: rhi::Buffer,
-    pub normal_vb: Option<rhi::Buffer>,
-    pub uv_vb: Option<rhi::Buffer>,
-    pub tangent_vb: Option<rhi::Buffer>,
-
-    pub ib: rhi::Buffer,
-    pub materials: rhi::Buffer,
-    pub transform: rhi::Buffer,
+    pub ib: rhi::DeviceBuffer,
+    pub materials: rhi::DeviceBuffer,
+    pub transform: rhi::DeviceBuffer,
 
     pub sub_meshes: Vec<Submesh>,
-}
-
-#[derive(Debug)]
-pub struct GpuMesh {
-    pub meshes: Vec<GpuDeviceMesh>,
-}
-
-impl GpuMesh {
-    pub fn new<'a>(
-        mesh: &'a Mesh,
-        builders: &[(
-            &'a Arc<Device>,
-            fn(&'a Arc<Device>, &'a Mesh) -> GpuDeviceMesh,
-        )],
-    ) -> Self {
-        let meshes = builders.iter().map(|(d, b)| b(d, mesh)).collect();
-
-        Self { meshes }
-    }
-
-    pub fn get_gpu_mesh(&self, device_mask: DeviceMask) -> Option<&'_ GpuDeviceMesh> {
-        self.meshes.iter().find(|m| m.device_id.eq(&device_mask))
-    }
 }
