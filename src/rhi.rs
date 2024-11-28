@@ -16,9 +16,18 @@ use oxidx::dx::{
 };
 use parking_lot::Mutex;
 
-use crate::utils::{new_uuid, Id};
+use crate::utils::new_uuid;
 
 pub const FRAMES_IN_FLIGHT: usize = 3;
+
+bitflags::bitflags! {
+    pub struct DeviceMask: u32 {
+        const D1 = 0x1;
+        const D2 = 0x2;
+        const D3 = 0x4;
+        const D4 = 0x8;
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceSettings<'a> {
@@ -35,7 +44,7 @@ pub enum AdapterType {
 
 #[derive(Debug)]
 pub struct Device {
-    pub id: Id<Device>,
+    pub id: DeviceMask,
     pub factory: dx::Factory4,
     pub adapter: dx::Adapter3,
     pub gpu: dx::Device,
@@ -212,7 +221,7 @@ impl Device {
 
 #[derive(Debug)]
 pub struct DescriptorHeap {
-    pub device_id: Id<Device>,
+    pub device_id: DeviceMask,
     pub heap: dx::DescriptorHeap,
     pub ty: dx::DescriptorHeapType,
     pub size: usize,
@@ -224,7 +233,7 @@ pub struct DescriptorHeap {
 impl DescriptorHeap {
     pub fn new(
         device: &dx::Device,
-        device_id: Id<Device>,
+        device_id: DeviceMask,
         ty: dx::DescriptorHeapType,
         size: usize,
     ) -> Self {
@@ -291,7 +300,7 @@ impl DescriptorHeap {
 
 #[derive(Debug)]
 pub struct Descriptor {
-    pub device_id: Id<Device>,
+    pub device_id: DeviceMask,
     pub heap_index: usize,
     pub cpu: dx::CpuDescriptorHandle,
     pub gpu: dx::GpuDescriptorHandle,

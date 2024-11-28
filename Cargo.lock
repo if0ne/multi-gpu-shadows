@@ -836,6 +836,7 @@ name = "multi-gpu-shadows"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bitflags 2.6.0",
  "glam",
  "gltf",
  "mikktspace",

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ahash = "0.8.11"
+bitflags = "2.6.0"
 oxidx = { git = "https://github.com/if0ne/oxidx" }
 gltf = "1.4.1"
 glam = "0.29.2"
