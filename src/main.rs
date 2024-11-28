@@ -1,10 +1,10 @@
-use std::{collections::HashMap, num::NonZero, rc::Rc};
+use std::{collections::HashMap, num::NonZero, rc::Rc, sync::Arc};
 
 use camera::{Camera, FpsController, GpuCamera};
-use glam::{vec2, vec3};
+use glam::vec3;
 use gltf::Mesh;
 use oxidx::dx;
-use rhi::{DeviceSettings, FRAMES_IN_FLIGHT};
+use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -34,7 +34,9 @@ pub struct Material {
 }
 
 pub struct Application {
-    pub device: Rc<rhi::Device>,
+    pub device_manager: DeviceManager,
+
+    pub device: Arc<rhi::Device>,
 
     pub keys: HashMap<PhysicalKey, bool>,
 
@@ -65,14 +67,10 @@ pub struct Application {
 
 impl Application {
     pub fn new(width: u32, height: u32) -> Self {
-        let device = Rc::new(
-            rhi::Device::fetch(DeviceSettings {
-                use_debug: true,
-                ty: rhi::AdapterType::Hardware { high_perf: true },
-                excluded_adapters: &[],
-            })
-            .expect("Failed to create device"),
-        );
+        let mut device_manager = rhi::DeviceManager::new(true);
+        let device = device_manager
+            .get_high_perf_device()
+            .expect("Failed to fetch high perf gpu");
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
         let cmd_queue = rhi::CommandQueue::new(&device, dx::CommandListType::Direct);
@@ -254,6 +252,7 @@ impl Application {
         });
 
         Self {
+            device_manager,
             device,
             cmd_queue,
             camera_buffers,

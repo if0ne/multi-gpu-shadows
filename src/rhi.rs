@@ -6,7 +6,7 @@ use std::{
     ops::Range,
     path::Path,
     rc::Rc,
-    sync::atomic::AtomicU64,
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use fixedbitset::FixedBitSet;
@@ -22,53 +22,39 @@ use crate::utils::new_uuid;
 pub const FRAMES_IN_FLIGHT: usize = 3;
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct DeviceMask: u32 {
-        const D1 = 0x1;
-        const D2 = 0x2;
-        const D3 = 0x4;
-        const D4 = 0x8;
+        const Gpu1 = 0x1;
+        const Gpu2 = 0x2;
+        const Gpu3 = 0x4;
+        const Gpu4 = 0x8;
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeviceSettings<'a> {
-    pub use_debug: bool,
-    pub ty: AdapterType,
-    pub excluded_adapters: &'a [&'a dx::Adapter3],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AdapterType {
-    Software,
-    Hardware { high_perf: bool },
-}
-
 #[derive(Debug)]
-pub struct Device {
-    pub id: DeviceMask,
+pub struct DeviceManager {
     pub factory: dx::Factory4,
-    pub adapter: dx::Adapter3,
-    pub gpu: dx::Device,
     pub debug: Option<dx::Debug1>,
 
-    pub rtv_heap: DescriptorHeap,
-    pub dsv_heap: DescriptorHeap,
-    pub shader_heap: DescriptorHeap,
-    pub sampler_heap: DescriptorHeap,
+    pub gpus: VecDeque<dx::Adapter3>,
+    pub gpu_warp: Option<dx::Adapter3>,
+    pub devices: Vec<Arc<Device>>,
+    pub device_masks: VecDeque<DeviceMask>,
 }
 
-impl Device {
-    pub fn fetch(settings: DeviceSettings<'_>) -> Option<Self> {
-        let flags = if settings.use_debug {
+impl DeviceManager {
+    pub fn new(use_debug: bool) -> Self {
+        let flags = if use_debug {
             dx::FactoryCreationFlags::Debug
         } else {
             dx::FactoryCreationFlags::empty()
         };
 
-        let factory = dx::create_factory4(flags).expect("Failed to create DXGI factory");
+        let factory =
+            dx::create_factory::<dx::Factory4>(flags).expect("Failed to create DXGI factory");
 
-        let debug = if settings.use_debug {
-            let debug: dx::Debug1 = dx::create_debug()
+        let debug = if use_debug {
+            let debug: dx::Debug1 = dx::create_debug::<dx::Debug>()
                 .expect("Failed to create debug")
                 .try_into()
                 .expect("Failed to fetch debug1");
@@ -84,31 +70,152 @@ impl Device {
             None
         };
 
-        let adapter = Self::get_adapter(&factory, &settings)?;
+        let gpu_warp = factory.enum_warp_adapters().ok();
+        let mut gpus = vec![];
 
+        if let Ok(factory) = TryInto::<dx::Factory7>::try_into(factory.clone()) {
+            let mut i = 0;
+
+            while let Ok(adapter) =
+                factory.enum_adapters_by_gpu_preference(i, dx::GpuPreference::HighPerformance)
+            {
+                let Ok(desc) = adapter.get_desc1() else {
+                    continue;
+                };
+
+                if desc.flags().contains(dx::AdapterFlags::Sofware) {
+                    continue;
+                }
+
+                if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
+                    gpus.push(adapter);
+                }
+
+                i += 1;
+            }
+        } else {
+            let mut i = 0;
+            while let Ok(adapter) = factory.enum_adapters(i) {
+                let Ok(desc) = adapter.get_desc1() else {
+                    continue;
+                };
+
+                if desc.flags().contains(dx::AdapterFlags::Sofware) {
+                    continue;
+                }
+
+                if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
+                    gpus.push(adapter);
+                }
+
+                i += 1;
+            }
+
+            gpus.sort_by(|l, r| {
+                let descs = (
+                    l.get_desc1().map(|d| d.vendor_id()),
+                    r.get_desc1().map(|d| d.vendor_id()),
+                );
+
+                match descs {
+                    (Ok(0x8086), Ok(0x8086)) => std::cmp::Ordering::Equal,
+                    (Ok(0x8086), Ok(_)) => std::cmp::Ordering::Less,
+                    (Ok(_), Ok(0x8086)) => std::cmp::Ordering::Greater,
+                    (_, _) => std::cmp::Ordering::Equal,
+                }
+            });
+        }
+
+        Self {
+            factory,
+            debug,
+            gpus: gpus.into_iter().collect(),
+            gpu_warp,
+            devices: vec![],
+            device_masks: VecDeque::from_iter([
+                DeviceMask::Gpu1,
+                DeviceMask::Gpu2,
+                DeviceMask::Gpu3,
+                DeviceMask::Gpu4,
+            ]),
+        }
+    }
+
+    pub fn get_high_perf_device(&mut self) -> Option<Arc<Device>> {
+        let adapter = self.gpus.pop_front()?;
+        let id = self.device_masks.pop_front()?;
+        let device = Arc::new(Device::new(adapter, id));
+
+        self.devices.push(Arc::clone(&device));
+
+        Some(device)
+    }
+
+    pub fn get_low_perf_device(&mut self) -> Option<Arc<Device>> {
+        let adapter = self.gpus.pop_back()?;
+        let id = self.device_masks.pop_back()?;
+        let device = Arc::new(Device::new(adapter, id));
+
+        self.devices.push(Arc::clone(&device));
+
+        Some(device)
+    }
+
+    pub fn get_warp(&mut self) -> Device {
+        let adapter = self.gpu_warp.take().expect("Failed to fetch warp");
+        let id = self
+            .device_masks
+            .pop_back()
+            .expect("Failed to get device id");
+
+        Device::new(adapter, id)
+    }
+
+    pub fn get_devices<'a>(
+        &'a self,
+        device_mask: DeviceMask,
+    ) -> impl Iterator<Item = &'a Arc<Device>> {
+        self.devices
+            .iter()
+            .filter(move |d| device_mask.contains(d.id))
+    }
+
+    pub fn get_device(&self, device_id: DeviceMask) -> Option<&Arc<Device>> {
+        self.devices.iter().find(|d| device_id.eq(&d.id))
+    }
+}
+
+#[derive(Debug)]
+pub struct Device {
+    pub id: DeviceMask,
+    pub adapter: dx::Adapter3,
+    pub gpu: dx::Device,
+
+    pub rtv_heap: DescriptorHeap,
+    pub dsv_heap: DescriptorHeap,
+    pub shader_heap: DescriptorHeap,
+    pub sampler_heap: DescriptorHeap,
+}
+
+impl Device {
+    pub(crate) fn new(adapter: dx::Adapter3, id: DeviceMask) -> Self {
         let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
             .expect("Failed to create device");
-
-        let id = Id::new();
 
         let rtv_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Rtv, 128);
         let dsv_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Dsv, 128);
         let shader_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::CbvSrvUav, 1024);
         let sampler_heap = DescriptorHeap::new(&device, id, dx::DescriptorHeapType::Sampler, 32);
 
-        Some(Self {
+        Self {
             id,
-
-            factory,
             adapter,
             gpu: device,
-            debug,
-
             rtv_heap,
             dsv_heap,
             shader_heap,
             sampler_heap,
-        })
+        }
     }
 
     pub fn create_resource(
@@ -134,89 +241,6 @@ impl Device {
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
         GpuResource { res, name, uuid }
-    }
-
-    fn get_adapter(factory: &dx::Factory4, settings: &DeviceSettings) -> Option<dx::Adapter3> {
-        match settings.ty {
-            AdapterType::Software => {
-                Self::get_software_adapter(factory, settings.excluded_adapters)
-            }
-            AdapterType::Hardware { high_perf } => {
-                Self::get_hardware_adapter(factory, high_perf, settings.excluded_adapters)
-            }
-        }
-    }
-
-    fn get_software_adapter(
-        factory: &dx::Factory4,
-        excluded: &[&dx::Adapter3],
-    ) -> Option<dx::Adapter3> {
-        let adapter = factory.enum_warp_adapters().ok()?;
-
-        if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
-            return None;
-        }
-
-        Some(adapter)
-    }
-
-    fn get_hardware_adapter(
-        factory: &dx::Factory4,
-        high_perf: bool,
-        excluded: &[&dx::Adapter3],
-    ) -> Option<dx::Adapter3> {
-        if let Ok(factory) = TryInto::<dx::Factory7>::try_into(factory.clone()) {
-            let mut i = 0;
-            let pref = if high_perf {
-                dx::GpuPreference::HighPerformance
-            } else {
-                dx::GpuPreference::Unspecified
-            };
-
-            while let Ok(adapter) = factory.enum_adapters_by_gpu_preference(i, pref) {
-                if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
-                    i += 1;
-                    continue;
-                }
-
-                if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
-                    return Some(adapter);
-                }
-
-                i += 1;
-            }
-        }
-
-        let mut i = 0;
-        while let Ok(adapter) = factory.enum_adapters(i) {
-            if Self::is_exclude_adapter_contains_adapter(excluded, &adapter) {
-                i += 1;
-                continue;
-            }
-
-            if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
-                return Some(adapter);
-            }
-
-            i += 1;
-        }
-
-        None
-    }
-
-    fn is_exclude_adapter_contains_adapter(
-        excluded: &[&dx::Adapter3],
-        adapter: &dx::Adapter3,
-    ) -> bool {
-        excluded.iter().any(|a| {
-            match (
-                a.get_desc1().map(|d| d.adapter_luid()),
-                adapter.get_desc1().map(|d| d.adapter_luid()),
-            ) {
-                (Ok(l1), Ok(l2)) => l1 == l2,
-                _ => false,
-            }
-        })
     }
 }
 

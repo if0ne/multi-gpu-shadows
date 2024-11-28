@@ -2,8 +2,6 @@ pub fn new_uuid() -> u64 {
     rand::random()
 }
 
-use std::{marker::PhantomData, sync::atomic::AtomicUsize};
-
 use glam::Vec4Swizzles;
 
 pub fn align(value: u32, alignment: u32) -> u32 {
