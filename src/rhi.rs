@@ -9,6 +9,7 @@ use std::{
     sync::atomic::AtomicU64,
 };
 
+use fixedbitset::FixedBitSet;
 use oxidx::dx::{
     self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
     IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource,
@@ -227,7 +228,7 @@ pub struct DescriptorHeap {
     pub size: usize,
     pub inc_size: usize,
     pub shader_visible: bool,
-    pub descriptors: Mutex<Vec<bool>>,
+    pub descriptors: Mutex<FixedBitSet>,
 }
 
 impl DescriptorHeap {
@@ -237,7 +238,7 @@ impl DescriptorHeap {
         ty: dx::DescriptorHeapType,
         size: usize,
     ) -> Self {
-        let descriptors = Mutex::new(vec![false; size]);
+        let descriptors = Mutex::new(FixedBitSet::with_capacity(size));
 
         let (shader_visible, flags) =
             if ty == dx::DescriptorHeapType::CbvSrvUav || ty == dx::DescriptorHeapType::Sampler {
@@ -266,15 +267,11 @@ impl DescriptorHeap {
     pub fn alloc(&self) -> Descriptor {
         let mut descriptors = self.descriptors.lock();
 
-        let Some((index, val)) = descriptors
-            .iter_mut()
-            .enumerate()
-            .skip_while(|(_, b)| **b)
-            .next()
-        else {
-            panic!("Out of memory in descriptor heap");
-        };
-        *val = true;
+        let index = descriptors.minimum().unwrap_or(0) + 1;
+
+        assert!(index < self.size, "Out of memory");
+
+        descriptors.set(index, true);
 
         let cpu = self
             .heap
@@ -294,7 +291,7 @@ impl DescriptorHeap {
     }
 
     pub fn free(&self, descriptor: Descriptor) {
-        self.descriptors.lock()[descriptor.heap_index] = false;
+        self.descriptors.lock().set(descriptor.heap_index, false);
     }
 }
 
