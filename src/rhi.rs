@@ -51,11 +51,10 @@ impl DeviceManager {
             dx::FactoryCreationFlags::empty()
         };
 
-        let factory =
-            dx::create_factory::<dx::Factory4>(flags).expect("Failed to create DXGI factory");
+        let factory = dx::create_factory4(flags).expect("Failed to create DXGI factory");
 
         let debug = if use_debug {
-            let debug: dx::Debug1 = dx::create_debug::<dx::Debug>()
+            let debug: dx::Debug1 = dx::create_debug()
                 .expect("Failed to create debug")
                 .try_into()
                 .expect("Failed to fetch debug1");
@@ -545,6 +544,7 @@ impl CommandQueue {
         };
 
         CommandBuffer {
+            device_id: device.id,
             ty: self.ty,
             list,
             allocator,
@@ -1434,6 +1434,7 @@ impl GeomTopology {
 
 #[derive(Debug)]
 pub struct CommandBuffer {
+    pub(crate) device_id: DeviceMask,
     pub(crate) ty: dx::CommandListType,
     pub(crate) list: dx::GraphicsCommandList,
     pub(crate) allocator: CommandAllocatorEntry,

@@ -1,5 +1,5 @@
-use crate::rhi;
-use std::path::Path;
+use crate::rhi::{self, Device, DeviceManager, DeviceMask};
+use std::{path::Path, sync::Arc};
 
 use glam::{Mat4, Vec3, Vec4};
 use gltf::image;
@@ -237,9 +237,10 @@ pub struct GpuDeviceMesh {
     pub device_id: rhi::DeviceMask,
 
     pub pos_vb: rhi::Buffer,
-    pub normal_vb: rhi::Buffer,
-    pub uv_vb: rhi::Buffer,
-    pub tangent_vb: rhi::Buffer,
+    pub normal_vb: Option<rhi::Buffer>,
+    pub uv_vb: Option<rhi::Buffer>,
+    pub tangent_vb: Option<rhi::Buffer>,
+
     pub ib: rhi::Buffer,
     pub materials: rhi::Buffer,
     pub transform: rhi::Buffer,
@@ -250,4 +251,22 @@ pub struct GpuDeviceMesh {
 #[derive(Debug)]
 pub struct GpuMesh {
     pub meshes: Vec<GpuDeviceMesh>,
+}
+
+impl GpuMesh {
+    pub fn new<'a>(
+        mesh: &'a Mesh,
+        builders: &[(
+            &'a Arc<Device>,
+            fn(&'a Arc<Device>, &'a Mesh) -> GpuDeviceMesh,
+        )],
+    ) -> Self {
+        let meshes = builders.iter().map(|(d, b)| b(d, mesh)).collect();
+
+        Self { meshes }
+    }
+
+    pub fn get_gpu_mesh(&self, device_mask: DeviceMask) -> Option<&'_ GpuDeviceMesh> {
+        self.meshes.iter().find(|m| m.device_id.eq(&device_mask))
+    }
 }

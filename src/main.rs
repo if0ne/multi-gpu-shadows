@@ -1,8 +1,8 @@
 use std::{collections::HashMap, num::NonZero, rc::Rc, sync::Arc};
 
 use camera::{Camera, FpsController, GpuCamera};
-use glam::vec3;
-use gltf::Mesh;
+use glam::{vec3, Mat4};
+use gltf::{GpuDeviceMesh, GpuMesh, Mesh};
 use oxidx::dx;
 use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
 use winit::{
@@ -33,6 +33,13 @@ pub struct GpuMaterial {
     diffuse: [f32; 4],
 }
 
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[repr(align(256))]
+pub struct GpuTransform {
+    world: Mat4,
+}
+
 pub struct Application {
     pub device_manager: DeviceManager,
 
@@ -50,11 +57,7 @@ pub struct Application {
 
     pub pso: rhi::GraphicsPipeline,
 
-    pub model: Mesh,
-    pub position_vertex_buffer: rhi::Buffer,
-    pub normal_vertex_buffer: rhi::Buffer,
-    pub index_buffer: rhi::Buffer,
-    pub materials: rhi::Buffer,
+    pub gpu_mesh: GpuMesh,
 
     pub window_width: u32,
     pub window_height: u32,
@@ -72,75 +75,96 @@ impl Application {
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
 
-        let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-            &device,
-            model.positions.len(),
-            format!("{} Vertex Buffer", "Check"),
+        let gpu_mesh = GpuMesh::new(
+            &model,
+            &[(&device, |device, mesh| {
+                let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
+                    &device,
+                    mesh.positions.len(),
+                    format!("{} Vertex Buffer", "Check"),
+                );
+
+                {
+                    let map = position_vertex_staging.map::<[f32; 3]>(None);
+                    map.pointer.clone_from_slice(&mesh.positions);
+                }
+
+                let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
+                    &device,
+                    mesh.normals.len(),
+                    format!("{} Vertex Buffer", "Check"),
+                );
+
+                {
+                    let map = normal_vertex_staging.map::<[f32; 3]>(None);
+                    map.pointer.clone_from_slice(&mesh.normals);
+                }
+
+                let mut index_staging = rhi::Buffer::copy::<u32>(
+                    &device,
+                    mesh.indices.len(),
+                    format!("{} Index Buffer", "check"),
+                );
+
+                {
+                    let map = index_staging.map::<u32>(None);
+                    map.pointer.clone_from_slice(&mesh.indices);
+                }
+
+                let position_vertex_buffer =
+                    rhi::Buffer::vertex::<[f32; 3]>(&device, mesh.positions.len(), "Vertex");
+
+                let normal_vertex_buffer =
+                    rhi::Buffer::vertex::<[f32; 3]>(&device, mesh.normals.len(), "Vertex");
+
+                let index_buffer = rhi::Buffer::index_u32(&device, mesh.indices.len(), "Index");
+
+                let mut materials = rhi::Buffer::constant::<GpuMaterial>(
+                    &device,
+                    mesh.materials.len(),
+                    "Materials Buffer",
+                );
+
+                {
+                    let data = mesh
+                        .materials
+                        .iter()
+                        .map(|m| match m.diffuse {
+                            gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
+                            gltf::MaterialSlot::Image(_) => todo!(),
+                        })
+                        .collect::<Vec<_>>();
+
+                    materials.write_all(&data);
+                }
+
+                let cmd_list = device.gfx_queue.get_command_buffer(&device);
+                cmd_list.begin(&device);
+                cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
+                cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
+                cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
+
+                device.gfx_queue.push_cmd_buffer(cmd_list);
+                let v = device.gfx_queue.execute();
+                device.gfx_queue.wait_on_cpu(v);
+
+                GpuDeviceMesh {
+                    device_id: device.id,
+                    pos_vb: position_vertex_buffer,
+                    normal_vb: Some(normal_vertex_buffer),
+                    uv_vb: None,
+                    tangent_vb: None,
+                    ib: index_buffer,
+                    materials,
+                    transform: rhi::Buffer::constant::<GpuTransform>(
+                        &device,
+                        FRAMES_IN_FLIGHT,
+                        "Transforma Matrix",
+                    ),
+                    sub_meshes: mesh.sub_meshes.clone(),
+                }
+            })],
         );
-
-        {
-            let map = position_vertex_staging.map::<[f32; 3]>(None);
-            map.pointer.clone_from_slice(&model.positions);
-        }
-
-        let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-            &device,
-            model.normals.len(),
-            format!("{} Vertex Buffer", "Check"),
-        );
-
-        {
-            let map = normal_vertex_staging.map::<[f32; 3]>(None);
-            map.pointer.clone_from_slice(&model.normals);
-        }
-
-        let mut index_staging = rhi::Buffer::copy::<u32>(
-            &device,
-            model.indices.len(),
-            format!("{} Index Buffer", "check"),
-        );
-
-        {
-            let map = index_staging.map::<u32>(None);
-            map.pointer.clone_from_slice(&model.indices);
-        }
-
-        let position_vertex_buffer =
-            rhi::Buffer::vertex::<[f32; 3]>(&device, model.positions.len(), "Vertex");
-
-        let normal_vertex_buffer =
-            rhi::Buffer::vertex::<[f32; 3]>(&device, model.normals.len(), "Vertex");
-
-        let index_buffer = rhi::Buffer::index_u32(&device, model.indices.len(), "Index");
-
-        let mut materials = rhi::Buffer::constant::<GpuMaterial>(
-            &device,
-            model.materials.len(),
-            "Materials Buffer",
-        );
-
-        {
-            let data = model
-                .materials
-                .iter()
-                .map(|m| match m.diffuse {
-                    gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
-                    gltf::MaterialSlot::Image(_) => todo!(),
-                })
-                .collect::<Vec<_>>();
-
-            materials.write_all(&data);
-        }
-
-        let cmd_list = device.gfx_queue.get_command_buffer(&device);
-        cmd_list.begin(&device);
-        cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
-        cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
-        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
-
-        device.gfx_queue.push_cmd_buffer(cmd_list);
-        let v = device.gfx_queue.execute();
-        device.gfx_queue.wait_on_cpu(v);
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -212,14 +236,10 @@ impl Application {
             window_height: height,
             keys: HashMap::new(),
 
-            model,
-            position_vertex_buffer,
-            normal_vertex_buffer,
-            index_buffer,
             depth_buffer,
             depth_view,
 
-            materials,
+            gpu_mesh,
         }
     }
 
@@ -294,16 +314,18 @@ impl Application {
 
         list.set_graphics_cbv(&self.camera_buffers.cbv[self.curr_frame], 0);
 
-        list.set_vertex_buffers(&[&self.position_vertex_buffer, &self.normal_vertex_buffer]);
-        list.set_index_buffer(&self.index_buffer);
+        if let Some(mesh) = self.gpu_mesh.get_gpu_mesh(list.device_id) {
+            list.set_vertex_buffers(&[&mesh.pos_vb, mesh.normal_vb.as_ref().unwrap()]);
+            list.set_index_buffer(&mesh.ib);
 
-        for submesh in &self.model.sub_meshes {
-            list.set_graphics_cbv(&self.materials.cbv[submesh.material_idx], 1);
-            list.draw(
-                submesh.index_count,
-                submesh.start_index_location,
-                submesh.base_vertex_location as i32,
-            );
+            for submesh in &mesh.sub_meshes {
+                list.set_graphics_cbv(&mesh.materials.cbv[submesh.material_idx], 1);
+                list.draw(
+                    submesh.index_count,
+                    submesh.start_index_location,
+                    submesh.base_vertex_location as i32,
+                );
+            }
         }
 
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
