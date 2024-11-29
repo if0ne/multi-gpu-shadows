@@ -80,10 +80,12 @@ impl DeviceManager {
                 factory.enum_adapters_by_gpu_preference(i, dx::GpuPreference::HighPerformance)
             {
                 let Ok(desc) = adapter.get_desc1() else {
+                    i += 1;
                     continue;
                 };
 
                 if desc.flags().contains(dx::AdapterFlags::Sofware) {
+                    i += 1;
                     continue;
                 }
 
@@ -97,10 +99,12 @@ impl DeviceManager {
             let mut i = 0;
             while let Ok(adapter) = factory.enum_adapters(i) {
                 let Ok(desc) = adapter.get_desc1() else {
+                    i += 1;
                     continue;
                 };
 
                 if desc.flags().contains(dx::AdapterFlags::Sofware) {
+                    i += 1;
                     continue;
                 }
 
@@ -308,9 +312,7 @@ impl DescriptorHeap {
     pub fn alloc(&self, device: &Arc<Device>) -> Descriptor {
         let mut descriptors = self.descriptors.lock();
 
-        let index = descriptors.minimum().unwrap_or(0) + 1;
-
-        assert!(index < self.size, "Out of memory");
+        let index = descriptors.zeroes().next().expect("Out of memory");
 
         descriptors.set(index, true);
 
@@ -635,7 +637,7 @@ impl DeviceTexture {
         clear_value: Option<dx::ClearValue>,
         name: impl AsRef<str>,
     ) -> Self {
-        let name = name.to_string();
+        let name = name.as_ref().to_string();
         let uuid = new_uuid();
         let desc = dx::ResourceDesc::texture_2d(width, height)
             .with_alignment(dx::HeapAlignment::ResourcePlacement)
@@ -704,7 +706,7 @@ impl Texture {
                         flags,
                         state,
                         clear_value,
-                        name,
+                        &name,
                     )
                 })
                 .collect(),
@@ -822,7 +824,8 @@ impl Swapchain {
             .with_usage(dx::FrameBufferUsage::RenderTargetOutput)
             .with_buffer_count(FRAMES_IN_FLIGHT)
             .with_scaling(dx::Scaling::None)
-            .with_swap_effect(dx::SwapEffect::FlipSequential);
+            .with_swap_effect(dx::SwapEffect::FlipSequential)
+            .with_flags(dx::SwapchainFlags::AllowTearing);
 
         let swapchain = factory
             .create_swapchain_for_hwnd(
@@ -857,7 +860,7 @@ impl Swapchain {
                 width,
                 height,
                 dx::Format::Unknown,
-                dx::SwapchainFlags::empty(),
+                dx::SwapchainFlags::AllowTearing,
             )
             .expect("Failed to resize swapchain");
 
@@ -866,11 +869,6 @@ impl Swapchain {
                 .swapchain
                 .get_buffer(i)
                 .expect("Failed to get swapchain buffer");
-            let descriptor = device.rtv_heap.alloc(device);
-
-            device
-                .gpu
-                .create_render_target_view(Some(&res), None, descriptor.cpu);
 
             let texture = DeviceTexture {
                 res: DeviceResource {
@@ -887,10 +885,7 @@ impl Swapchain {
                 state: RefCell::new(dx::ResourceStates::Common),
             };
 
-            let view = TextureView {
-                ty: TextureViewType::RenderTarget,
-                handle: descriptor,
-            };
+            let view = TextureView::new(device, &texture, TextureViewType::RenderTarget, None);
 
             self.resources.push((res, texture, view, sync_point));
         }
@@ -900,7 +895,7 @@ impl Swapchain {
         let interval = if vsync { 1 } else { 0 };
 
         self.swapchain
-            .present(interval, dx::PresentFlags::empty())
+            .present(interval, dx::PresentFlags::AllowTearing)
             .expect("Failed to present");
     }
 }
@@ -1228,7 +1223,7 @@ impl Buffer {
     pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
         self.buffers
             .iter_mut()
-            .for_each(|buffer| buffer.write(index, data));
+            .for_each(|buffer| buffer.write(index, data.clone()));
     }
 
     pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
@@ -1388,22 +1383,19 @@ impl DeviceBuffer {
         }
     }
 
-    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
+    pub fn write<T: Clone + 'static>(&mut self, index: usize, data: T) {
         let size = size_of::<T>();
-
-        const { assert!(align_of::<T>() == 256) };
         debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
         debug_assert!(size * index < self.size);
 
-        let mapped = self.map::<T>(Some(index * size..(index + 1) * size));
-        mapped.pointer.clone_from_slice(std::slice::from_ref(data));
+        let mapped = self.map::<T>();
+        mapped.pointer[index] = data;
     }
 
     pub fn write_all<T: Clone + 'static>(&mut self, data: &[T]) {
-        const { assert!(align_of::<T>() == 256) };
         debug_assert_eq!(TypeId::of::<T>(), self.inner_ty);
 
-        let mapped = self.map::<T>(None);
+        let mapped = self.map::<T>();
         mapped.pointer.clone_from_slice(data);
     }
 
@@ -1463,17 +1455,13 @@ impl DeviceBuffer {
         self.srv = Some(d);
     }
 
-    pub fn map<T>(&mut self, range: Option<Range<usize>>) -> BufferMap<'_, T> {
-        let size = if let Some(ref r) = range {
-            r.end - r.start
-        } else {
-            self.size / size_of::<T>()
-        };
+    pub fn map<T>(&mut self) -> BufferMap<'_, T> {
+        let size = self.size / size_of::<T>();
 
         let pointer = self
             .res
             .res
-            .map::<T>(0, range.clone())
+            .map::<T>(0, None)
             .expect("Failed to map buffer");
 
         unsafe {
@@ -1481,7 +1469,6 @@ impl DeviceBuffer {
 
             BufferMap {
                 buffer: self,
-                range,
                 pointer,
             }
         }
@@ -1490,13 +1477,12 @@ impl DeviceBuffer {
 
 pub struct BufferMap<'a, T> {
     buffer: &'a DeviceBuffer,
-    range: Option<Range<usize>>,
     pub pointer: &'a mut [T],
 }
 
 impl<'a, T> Drop for BufferMap<'a, T> {
     fn drop(&mut self) {
-        self.buffer.res.res.unmap(0, self.range.clone());
+        self.buffer.res.res.unmap(0, None);
     }
 }
 

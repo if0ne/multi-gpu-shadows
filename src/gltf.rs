@@ -360,14 +360,14 @@ impl GpuMesh {
                 .iter()
                 .filter(|(d, _, _)| builder.tangent_vb.contains(d.id));
 
-            let mut tangent_vb_staging = rhi::Buffer::copy::<[f32; 3]>(
+            let mut tangent_vb_staging = rhi::Buffer::copy::<[f32; 4]>(
                 builder.mesh.tangents.len(),
                 "Vertex Tangent",
                 &devices,
             );
             tangent_vb_staging.write_all(&builder.mesh.tangents);
 
-            let tangent_vb = rhi::Buffer::vertex::<[f32; 2]>(
+            let tangent_vb = rhi::Buffer::vertex::<[f32; 4]>(
                 builder.mesh.tangents.len(),
                 "Vertex Tangent",
                 &devices,
@@ -416,7 +416,9 @@ impl GpuMesh {
                     .mesh
                     .materials
                     .iter()
-                    .map(|m| m.diffuse_color)
+                    .map(|m| GpuMaterial {
+                        diffuse: m.diffuse_color,
+                    })
                     .collect::<Vec<_>>();
 
                 materials.write_all(&data);

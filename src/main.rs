@@ -126,7 +126,7 @@ impl Application {
             aspect_ratio: width as f32 / height as f32,
         };
 
-        let controller = FpsController::new(0.003, 1.0);
+        let controller = FpsController::new(0.003, 100.0);
 
         let camera_buffers =
             rhi::Buffer::constant::<GpuCamera>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
@@ -255,7 +255,7 @@ impl Application {
 
         self.device.gfx_queue.push_cmd_buffer(list);
         *sync_point = self.device.gfx_queue.execute();
-        ctx.swapchain.present(true);
+        ctx.swapchain.present(false);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.device
             .gfx_queue
@@ -337,7 +337,6 @@ impl ApplicationHandler for Application {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        self.timer.tick();
         match event {
             WindowEvent::Focused(focused) => {
                 if focused {
@@ -390,11 +389,13 @@ impl ApplicationHandler for Application {
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.timer.tick();
+                self.calculate_frame_stats();
+
                 if self.app_paused {
                     std::thread::sleep(Duration::from_millis(100));
                     return;
                 }
-                self.calculate_frame_stats();
                 self.update();
                 self.render();
             }

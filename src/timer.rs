@@ -11,7 +11,8 @@ pub struct GameTimer {
     paused_time: f64,
     stop_time: f64,
 
-    delta_time: f64,
+    prev_tick: f64,
+    curr_tick: f64,
 }
 
 impl Default for GameTimer {
@@ -23,7 +24,8 @@ impl Default for GameTimer {
             base_time: Default::default(),
             paused_time: Default::default(),
             stop_time: Default::default(),
-            delta_time: -1.0,
+            prev_tick: Default::default(),
+            curr_tick: Default::default(),
         }
     }
 }
@@ -38,7 +40,7 @@ impl GameTimer {
     }
 
     pub fn delta_time(&self) -> f32 {
-        self.delta_time as f32
+        (self.curr_tick - self.prev_tick) as f32
     }
 
     pub fn reset(&mut self) {
@@ -72,15 +74,12 @@ impl GameTimer {
 
     pub fn tick(&mut self) {
         if self.stopped {
-            self.delta_time = 0.0;
+            self.prev_tick = 0.0;
+            self.curr_tick = 0.0;
             return;
         }
 
-        self.delta_time = self.frame_timer.elapsed().as_secs_f64() * Self::MILLIS_PER_SECS;
-        self.frame_timer = Instant::now();
-
-        if self.delta_time < 0.0 {
-            self.delta_time = 0.0;
-        }
+        self.prev_tick = self.curr_tick;
+        self.curr_tick = self.frame_timer.elapsed().as_secs_f64();
     }
 }
