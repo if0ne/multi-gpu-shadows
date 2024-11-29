@@ -1,4 +1,5 @@
 mod camera;
+mod gbuffer;
 mod gltf;
 mod rhi;
 mod timer;
@@ -7,6 +8,7 @@ mod utils;
 use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
 
 use camera::{Camera, FpsController, GpuCamera};
+use gbuffer::Gbuffer;
 use glam::{vec3, Mat4};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use oxidx::dx;
@@ -67,8 +69,7 @@ pub struct Application {
     pub window_width: u32,
     pub window_height: u32,
 
-    pub depth_buffer: rhi::DeviceTexture,
-    pub depth_view: rhi::TextureView,
+    pub gbuffer: Gbuffer,
 }
 
 impl Application {
@@ -115,23 +116,7 @@ impl Application {
             },
         );
 
-        let depth_buffer = rhi::DeviceTexture::new(
-            &device,
-            width,
-            height,
-            dx::Format::D24UnormS8Uint,
-            1,
-            dx::ResourceFlags::AllowDepthStencil,
-            dx::ResourceStates::DepthWrite,
-            Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
-            "Depth Buffer",
-        );
-        let depth_view = rhi::TextureView::new(
-            &device,
-            &depth_buffer,
-            rhi::TextureViewType::DepthTarget,
-            None,
-        );
+        let gbuffer = Gbuffer::new(&device, width, height);
 
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
@@ -161,10 +146,7 @@ impl Application {
             window_width: width,
             window_height: height,
             keys: HashMap::new(),
-
-            depth_buffer,
-            depth_view,
-
+            gbuffer,
             gpu_mesh,
         }
     }
@@ -234,9 +216,9 @@ impl Application {
 
         list.set_image_barrier(texture, dx::ResourceStates::RenderTarget, None);
         list.clear_render_target(view, 0.0, 0.0, 0.0);
-        list.clear_depth_target(&self.depth_view);
+        list.clear_depth_target(&self.gbuffer.depth_dsv);
 
-        list.set_render_targets(&[view], Some(&self.depth_view));
+        list.set_render_targets(&[view], Some(&self.gbuffer.depth_dsv));
         list.set_viewport(self.window_width, self.window_height);
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
@@ -404,23 +386,7 @@ impl ApplicationHandler for Application {
                     );
                     self.curr_frame = 0;
 
-                    self.depth_buffer = rhi::DeviceTexture::new(
-                        &self.device,
-                        size.width,
-                        size.height,
-                        dx::Format::D24UnormS8Uint,
-                        1,
-                        dx::ResourceFlags::AllowDepthStencil,
-                        dx::ResourceStates::DepthWrite,
-                        Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
-                        "Depth Buffer",
-                    );
-                    self.depth_view = rhi::TextureView::new(
-                        &self.device,
-                        &self.depth_buffer,
-                        rhi::TextureViewType::DepthTarget,
-                        None,
-                    );
+                    self.gbuffer = Gbuffer::new(&self.device, size.width, size.height);
                 }
             }
             WindowEvent::RedrawRequested => {

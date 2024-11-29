@@ -726,6 +726,7 @@ pub enum TextureViewType {
     Storage,
 }
 
+#[derive(Debug)]
 pub struct TextureView {
     pub ty: TextureViewType,
     pub handle: Descriptor,
