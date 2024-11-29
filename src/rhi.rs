@@ -305,7 +305,7 @@ impl DescriptorHeap {
         }
     }
 
-    pub fn alloc(&self) -> Descriptor {
+    pub fn alloc(&self, device: &Arc<Device>) -> Descriptor {
         let mut descriptors = self.descriptors.lock();
 
         let index = descriptors.minimum().unwrap_or(0) + 1;
@@ -324,24 +324,53 @@ impl DescriptorHeap {
             .advance(index, self.inc_size);
 
         Descriptor {
-            device_id: self.device_id,
+            device: Arc::clone(device),
+            ty: self.ty,
             heap_index: index,
             cpu,
             gpu,
         }
     }
-
-    pub fn free(&self, descriptor: Descriptor) {
-        self.descriptors.lock().set(descriptor.heap_index, false);
-    }
 }
 
 #[derive(Debug)]
 pub struct Descriptor {
-    pub device_id: DeviceMask,
+    pub device: Arc<Device>,
+    pub ty: dx::DescriptorHeapType,
     pub heap_index: usize,
     pub cpu: dx::CpuDescriptorHandle,
     pub gpu: dx::GpuDescriptorHandle,
+}
+
+impl Drop for Descriptor {
+    fn drop(&mut self) {
+        match self.ty {
+            dx::DescriptorHeapType::Rtv => self
+                .device
+                .rtv_heap
+                .descriptors
+                .lock()
+                .set(self.heap_index, false),
+            dx::DescriptorHeapType::Dsv => self
+                .device
+                .dsv_heap
+                .descriptors
+                .lock()
+                .set(self.heap_index, false),
+            dx::DescriptorHeapType::CbvSrvUav => self
+                .device
+                .shader_heap
+                .descriptors
+                .lock()
+                .set(self.heap_index, false),
+            dx::DescriptorHeapType::Sampler => self
+                .device
+                .sampler_heap
+                .descriptors
+                .lock()
+                .set(self.heap_index, false),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -704,14 +733,14 @@ pub struct TextureView {
 
 impl TextureView {
     pub fn new(
-        device: &Device,
+        device: &Arc<Device>,
         parent: &DeviceTexture,
         ty: TextureViewType,
         mip: Option<u32>,
     ) -> Self {
         let handle = match ty {
             TextureViewType::RenderTarget => {
-                let handle = device.rtv_heap.alloc();
+                let handle = device.rtv_heap.alloc(device);
                 device.gpu.create_render_target_view(
                     Some(&parent.res.res),
                     Some(&dx::RenderTargetViewDesc::texture_2d(parent.format, 0, 0)),
@@ -720,7 +749,7 @@ impl TextureView {
                 handle
             }
             TextureViewType::DepthTarget => {
-                let handle = device.dsv_heap.alloc();
+                let handle = device.dsv_heap.alloc(device);
                 device.gpu.create_depth_stencil_view(
                     Some(&parent.res.res),
                     Some(&dx::DepthStencilViewDesc::texture_2d(parent.format, 0)),
@@ -735,7 +764,7 @@ impl TextureView {
                     (parent.levels, 0)
                 };
 
-                let handle = device.shader_heap.alloc();
+                let handle = device.shader_heap.alloc(device);
                 device.gpu.create_shader_resource_view(
                     Some(&parent.res.res),
                     Some(&dx::ShaderResourceViewDesc::texture_2d(
@@ -751,7 +780,7 @@ impl TextureView {
             }
             TextureViewType::Storage => {
                 let mip = mip.unwrap_or(0);
-                let handle = device.shader_heap.alloc();
+                let handle = device.shader_heap.alloc(device);
 
                 device.gpu.create_unordered_access_view(
                     Some(&parent.res.res),
@@ -782,7 +811,7 @@ pub struct Swapchain {
 impl Swapchain {
     pub fn new(
         factory: &dx::Factory4,
-        device: &Device,
+        device: &Arc<Device>,
         width: u32,
         height: u32,
         hwnd: NonZero<isize>,
@@ -816,7 +845,7 @@ impl Swapchain {
         swapchain
     }
 
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32, sync_point: u64) {
+    pub fn resize(&mut self, device: &Arc<Device>, width: u32, height: u32, sync_point: u64) {
         {
             std::mem::take(&mut self.resources);
         }
@@ -836,7 +865,7 @@ impl Swapchain {
                 .swapchain
                 .get_buffer(i)
                 .expect("Failed to get swapchain buffer");
-            let descriptor = device.rtv_heap.alloc();
+            let descriptor = device.rtv_heap.alloc(device);
 
             device
                 .gpu
@@ -1377,13 +1406,13 @@ impl DeviceBuffer {
         mapped.pointer.clone_from_slice(data);
     }
 
-    pub fn build_constant(&mut self, device: &Device, count: usize, object_size: usize) {
+    pub fn build_constant(&mut self, device: &Arc<Device>, count: usize, object_size: usize) {
         if !self.cbv.is_empty() {
             return;
         }
 
         for i in 0..count {
-            let d = device.shader_heap.alloc();
+            let d = device.shader_heap.alloc(device);
             let desc = dx::ConstantBufferViewDesc::new(
                 self.res.res.get_gpu_virtual_address() + (i * object_size) as u64,
                 object_size,
@@ -1394,12 +1423,12 @@ impl DeviceBuffer {
         }
     }
 
-    pub fn build_storage(&mut self, device: &Device) {
+    pub fn build_storage(&mut self, device: &Arc<Device>) {
         if self.uav.is_some() {
             return;
         }
 
-        let d = device.shader_heap.alloc();
+        let d = device.shader_heap.alloc(device);
         let desc = dx::UnorderedAccessViewDesc::buffer(
             dx::Format::Unknown,
             0..self.size,
@@ -1414,12 +1443,12 @@ impl DeviceBuffer {
         self.uav = Some(d);
     }
 
-    pub fn build_shader_resource(&mut self, device: &Device) {
+    pub fn build_shader_resource(&mut self, device: &Arc<Device>) {
         if self.srv.is_some() {
             return;
         }
 
-        let d = device.shader_heap.alloc();
+        let d = device.shader_heap.alloc(device);
         let desc = dx::ShaderResourceViewDesc::buffer(
             dx::Format::Unknown,
             0..(self.size / self.stride),
@@ -1511,8 +1540,8 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn new(device: &Device, address: SamplerAddress, filter: SamplerFilter) -> Self {
-        let handle = device.sampler_heap.alloc();
+    pub fn new(device: &Arc<Device>, address: SamplerAddress, filter: SamplerFilter) -> Self {
+        let handle = device.sampler_heap.alloc(device);
 
         let desc = dx::SamplerDesc::new(filter.as_dx())
             .with_address_u(address.as_dx())
