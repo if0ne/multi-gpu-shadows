@@ -237,7 +237,7 @@ impl Device {
         state: dx::ResourceStates,
         clear_value: Option<dx::ClearValue>,
         name: impl ToString,
-    ) -> GpuResource {
+    ) -> DeviceResource {
         let name = name.to_string();
         let uuid = new_uuid();
 
@@ -252,7 +252,7 @@ impl Device {
             )
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
-        GpuResource {
+        DeviceResource {
             device_id: self.id,
             res,
             name,
@@ -576,7 +576,7 @@ impl CommandQueue {
 }
 
 #[derive(Debug)]
-pub struct GpuResource {
+pub struct DeviceResource {
     pub device_id: DeviceMask,
     pub res: dx::Resource,
     pub name: String,
@@ -584,8 +584,8 @@ pub struct GpuResource {
 }
 
 #[derive(Debug)]
-pub struct Texture {
-    pub res: GpuResource,
+pub struct DeviceTexture {
+    pub res: DeviceResource,
     pub uuid: u64,
     pub width: u32,
     pub height: u32,
@@ -594,7 +594,7 @@ pub struct Texture {
     pub state: RefCell<dx::ResourceStates>,
 }
 
-impl Texture {
+impl DeviceTexture {
     pub fn new(
         device: &Device,
         width: u32,
@@ -604,7 +604,7 @@ impl Texture {
         flags: dx::ResourceFlags,
         state: dx::ResourceStates,
         clear_value: Option<dx::ClearValue>,
-        name: impl ToString,
+        name: impl AsRef<str>,
     ) -> Self {
         let name = name.to_string();
         let uuid = new_uuid();
@@ -645,6 +645,50 @@ impl Texture {
     }
 }
 
+#[derive(Debug)]
+pub struct Texture {
+    pub textures: Vec<DeviceTexture>,
+}
+
+impl Texture {
+    pub fn new(
+        width: u32,
+        height: u32,
+        format: dx::Format,
+        levels: u32,
+        flags: dx::ResourceFlags,
+        state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
+        name: impl AsRef<str>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        Self {
+            textures: devices
+                .iter()
+                .map(|d| {
+                    DeviceTexture::new(
+                        &d,
+                        width,
+                        height,
+                        format,
+                        levels,
+                        flags,
+                        state,
+                        clear_value,
+                        name,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn get_texture(&self, device_id: DeviceMask) -> Option<&'_ DeviceTexture> {
+        self.textures
+            .iter()
+            .find(|b| b.res.device_id.eq(&device_id))
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TextureViewType {
     RenderTarget,
@@ -659,7 +703,12 @@ pub struct TextureView {
 }
 
 impl TextureView {
-    pub fn new(device: &Device, parent: &Texture, ty: TextureViewType, mip: Option<u32>) -> Self {
+    pub fn new(
+        device: &Device,
+        parent: &DeviceTexture,
+        ty: TextureViewType,
+        mip: Option<u32>,
+    ) -> Self {
         let handle = match ty {
             TextureViewType::RenderTarget => {
                 let handle = device.rtv_heap.alloc();
@@ -725,7 +774,7 @@ impl TextureView {
 pub struct Swapchain {
     pub swapchain: dx::Swapchain1,
     pub hwnd: NonZero<isize>,
-    pub resources: Vec<(dx::Resource, Texture, TextureView, u64)>,
+    pub resources: Vec<(dx::Resource, DeviceTexture, TextureView, u64)>,
     pub width: u32,
     pub height: u32,
 }
@@ -793,8 +842,9 @@ impl Swapchain {
                 .gpu
                 .create_render_target_view(Some(&res), None, descriptor.cpu);
 
-            let texture = Texture {
-                res: GpuResource {
+            let texture = DeviceTexture {
+                res: DeviceResource {
+                    device_id: device.id,
                     res: res.clone(),
                     name: "Swapchain Image".to_string(),
                     uuid: 0,
@@ -1220,7 +1270,7 @@ impl Buffer {
 
 #[derive(Debug)]
 pub struct DeviceBuffer {
-    pub res: GpuResource,
+    pub res: DeviceResource,
     pub ty: BufferType,
     pub state: RefCell<dx::ResourceStates>,
 
@@ -1536,7 +1586,7 @@ impl CommandBuffer {
 
     pub fn set_image_barrier(
         &self,
-        texture: &Texture,
+        texture: &DeviceTexture,
         state: dx::ResourceStates,
         mip: Option<u32>,
     ) {
@@ -1628,12 +1678,16 @@ impl CommandBuffer {
             .draw_indexed_instanced(count, 1, start_index, base_vertex, 0);
     }
 
-    pub fn copy_texture_to_texture(&self, dst: &Texture, src: &Texture) {
+    pub fn copy_texture_to_texture(&self, dst: &DeviceTexture, src: &DeviceTexture) {
         self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 
     pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &Buffer) {
         let Some(src) = src.get_buffer(self.device_id) else {
+            return;
+        };
+
+        let Some(dst) = dst.get_texture(self.device_id) else {
             return;
         };
 

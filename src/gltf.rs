@@ -442,7 +442,6 @@ impl GpuMesh {
                     let img = img.to_rgba8();
 
                     let texture = rhi::Texture::new(
-                        builder.devices[0],
                         img.width(),
                         img.height(),
                         dx::Format::Rgba8Unorm,
@@ -451,9 +450,14 @@ impl GpuMesh {
                         dx::ResourceStates::CopyDest,
                         None,
                         "Texture",
+                        builder.devices,
                     );
 
-                    let total_size = texture.get_size(builder.devices[0], None);
+                    // Fix this
+                    let total_size = texture
+                        .get_texture(builder.devices[0].id)
+                        .expect("Device not found")
+                        .get_size(builder.devices[0], None);
 
                     let staging =
                         rhi::Buffer::copy::<u8>(total_size, "Staging Buffer", builder.devices);

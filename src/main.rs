@@ -67,7 +67,7 @@ pub struct Application {
     pub window_width: u32,
     pub window_height: u32,
 
-    pub depth_buffer: rhi::Texture,
+    pub depth_buffer: rhi::DeviceTexture,
     pub depth_view: rhi::TextureView,
 }
 
@@ -115,7 +115,7 @@ impl Application {
             },
         );
 
-        let depth_buffer = rhi::Texture::new(
+        let depth_buffer = rhi::DeviceTexture::new(
             &device,
             width,
             height,
@@ -404,7 +404,7 @@ impl ApplicationHandler for Application {
                     );
                     self.curr_frame = 0;
 
-                    self.depth_buffer = rhi::Texture::new(
+                    self.depth_buffer = rhi::DeviceTexture::new(
                         &self.device,
                         size.width,
                         size.height,
