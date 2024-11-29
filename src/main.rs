@@ -78,10 +78,10 @@ impl Application {
             .get_high_perf_device()
             .expect("Failed to fetch high perf gpu");
 
-        let model = Mesh::load("./assets/fantasy_island/scene.gltf");
+        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
 
         let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
-            mesh: &model,
+            mesh,
             devices: &[&device],
             normal_vb: device.id,
             uv_vb: device.id,
@@ -257,7 +257,7 @@ impl Application {
             list.set_graphics_cbv(
                 &self
                     .gpu_mesh
-                    .materials
+                    .gpu_materials
                     .get_buffer(self.device.id)
                     .expect("Not found device")
                     .cbv[submesh.material_idx],

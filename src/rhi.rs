@@ -635,11 +635,13 @@ impl Texture {
         }
     }
 
-    pub fn get_size(&self, device: dx::Device, mip: Option<u32>) -> usize {
+    pub fn get_size(&self, device: &Device, mip: Option<u32>) -> usize {
         let mip = mip.map(|m| m..(m + 1)).unwrap_or(0..self.levels);
 
         let desc = self.res.res.get_desc();
-        device.get_copyable_footprints(&desc, mip, 0, &mut [], &mut [], &mut [])
+        device
+            .gpu
+            .get_copyable_footprints(&desc, mip, 0, &mut [], &mut [], &mut [])
     }
 }
 
@@ -1630,7 +1632,11 @@ impl CommandBuffer {
         self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 
-    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &DeviceBuffer) {
+    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &Buffer) {
+        let Some(src) = src.get_buffer(self.device_id) else {
+            return;
+        };
+
         let desc = dst.res.res.get_desc();
         let mut footprints = vec![dx::PlacedSubresourceFootprint::default(); dst.levels as usize];
         let mut num_rows = vec![Default::default(); dst.levels as usize];

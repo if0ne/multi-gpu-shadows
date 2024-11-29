@@ -5,7 +5,7 @@ use crate::{
 use std::{path::Path, sync::Arc};
 
 use glam::{Mat4, Vec3, Vec4};
-use gltf::image;
+use oxidx::dx;
 
 #[derive(Clone, Debug)]
 pub enum ImageSource {
@@ -230,7 +230,7 @@ impl<'a> mikktspace::Geometry for TangentCalcContext<'a> {
 
 #[derive(Clone, Debug)]
 pub struct GpuMeshBuilder<'a> {
-    pub mesh: &'a Mesh,
+    pub mesh: Mesh,
     pub devices: &'a [&'a Arc<Device>],
     pub normal_vb: DeviceMask,
     pub uv_vb: DeviceMask,
@@ -246,10 +246,13 @@ pub struct GpuMesh {
     pub tangent_vb: rhi::Buffer,
 
     pub ib: rhi::Buffer,
-    pub materials: rhi::Buffer,
+    pub gpu_materials: rhi::Buffer,
     pub transform: rhi::Buffer,
 
+    pub images: Vec<rhi::Texture>,
+
     pub sub_meshes: Vec<Submesh>,
+    pub materials: Vec<Material>,
 }
 
 impl GpuMesh {
@@ -428,6 +431,42 @@ impl GpuMesh {
             builder.devices,
         );
 
+        let images = builder
+            .mesh
+            .images
+            .into_iter()
+            .map(|img| match img {
+                ImageSource::Path(_) => todo!(),
+                ImageSource::Data(vec) => {
+                    let img = image::load_from_memory(&vec).expect("Failed to load image");
+                    let img = img.to_rgba8();
+
+                    let texture = rhi::Texture::new(
+                        builder.devices[0],
+                        img.width(),
+                        img.height(),
+                        dx::Format::Rgba8Unorm,
+                        1,
+                        dx::ResourceFlags::empty(),
+                        dx::ResourceStates::CopyDest,
+                        None,
+                        "Texture",
+                    );
+
+                    let total_size = texture.get_size(builder.devices[0], None);
+
+                    let staging =
+                        rhi::Buffer::copy::<u8>(total_size, "Staging Buffer", builder.devices);
+
+                    all_executors.iter().for_each(|(d, _, cmd)| {
+                        cmd.copy_buffer_to_texture(d, &texture, &staging);
+                    });
+
+                    (texture, staging)
+                }
+            })
+            .collect::<Vec<_>>();
+
         let values = all_executors.into_iter().map(|(_, queue, cmd)| {
             queue.push_cmd_buffer(cmd);
             (queue, queue.execute())
@@ -443,9 +482,12 @@ impl GpuMesh {
             uv_vb,
             tangent_vb,
             ib,
-            materials,
+            gpu_materials: materials,
             transform,
-            sub_meshes: builder.mesh.sub_meshes.clone(),
+            images: images.into_iter().map(|(i, _)| i).collect(),
+
+            sub_meshes: builder.mesh.sub_meshes,
+            materials: builder.mesh.materials,
         }
     }
 }
