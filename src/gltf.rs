@@ -1,5 +1,5 @@
 use crate::{
-    rhi::{self, Device, DeviceManager, DeviceMask, FRAMES_IN_FLIGHT},
+    rhi::{self, Device, DeviceMask, FRAMES_IN_FLIGHT},
     GpuMaterial, GpuTransform,
 };
 use std::{path::Path, sync::Arc};
@@ -14,15 +14,10 @@ pub enum ImageSource {
 }
 
 #[derive(Clone, Debug)]
-pub enum MaterialSlot {
-    Placeholder([f32; 4]),
-    Image(usize),
-}
-
-#[derive(Clone, Debug)]
 pub struct Material {
-    pub diffuse: MaterialSlot,
-    pub normal: MaterialSlot,
+    pub diffuse_color: [f32; 4],
+    pub diffuse_map: Option<usize>,
+    pub normal_map: Option<usize>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -62,7 +57,7 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
 
 impl Mesh {
     pub fn load(path: impl AsRef<Path>) -> Self {
-        let (gltf, buffers, images) = gltf::import(path).expect("Failed to open file");
+        let (gltf, buffers, images) = gltf::import(&path).expect("Failed to open file");
 
         let scene = gltf
             .default_scene()
@@ -70,22 +65,20 @@ impl Mesh {
             .expect("Failed to fetch scene");
         let mut res = Mesh::default();
 
-        for image in gltf.images() {
-            match image.source() {
-                image::Source::Uri { uri, .. } => {
-                    //todo!()
-                }
-                image::Source::View { view, .. } => {
-                    //todo!()
-                }
-            }
-        }
+        res.images = gltf
+            .images()
+            .map(|image| ImageSource::Data(images[image.index()].pixels.clone()))
+            .collect();
 
         res.materials = gltf
             .materials()
             .map(|m| Material {
-                diffuse: MaterialSlot::Placeholder(m.pbr_metallic_roughness().base_color_factor()),
-                normal: MaterialSlot::Placeholder([0.0, 0.0, 0.0, 0.0]),
+                diffuse_color: m.pbr_metallic_roughness().base_color_factor(),
+                diffuse_map: m
+                    .pbr_metallic_roughness()
+                    .base_color_texture()
+                    .map(|t| t.texture().index()),
+                normal_map: m.normal_texture().map(|m| m.texture().index()),
             })
             .collect();
 
@@ -420,10 +413,7 @@ impl GpuMesh {
                     .mesh
                     .materials
                     .iter()
-                    .map(|m| match m.diffuse {
-                        MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
-                        MaterialSlot::Image(_) => todo!(),
-                    })
+                    .map(|m| m.diffuse_color)
                     .collect::<Vec<_>>();
 
                 materials.write_all(&data);
