@@ -67,7 +67,22 @@ impl Mesh {
 
         res.images = gltf
             .images()
-            .map(|image| ImageSource::Data(images[image.index()].pixels.clone()))
+            .map(|image| match image.source() {
+                gltf::image::Source::View { view, .. } => {
+                    let buffer_data = &buffers[view.buffer().index()];
+                    let start = view.offset();
+                    let end = start + view.length();
+                    ImageSource::Data(buffer_data[start..end].to_vec())
+                }
+                gltf::image::Source::Uri { uri, .. } => {
+                    let path = path
+                        .as_ref()
+                        .parent()
+                        .unwrap_or_else(|| Path::new("./"))
+                        .join(uri);
+                    ImageSource::Path(path)
+                }
+            })
             .collect();
 
         res.materials = gltf
@@ -438,14 +453,10 @@ impl GpuMesh {
             .images
             .into_iter()
             .map(|img| match img {
-                ImageSource::Path(_) => todo!(),
-                ImageSource::Data(vec) => {
-                    let img = image::load_from_memory(&vec).expect("Failed to load image");
-                    let img = img.to_rgba8();
-
+                ImageSource::Path(_) => {
                     let texture = rhi::Texture::new(
-                        img.width(),
-                        img.height(),
+                        256,
+                        256,
                         dx::Format::Rgba8Unorm,
                         1,
                         dx::ResourceFlags::empty(),
@@ -455,17 +466,35 @@ impl GpuMesh {
                         builder.devices,
                     );
 
-                    // Fix this
-                    let total_size = texture
-                        .get_texture(builder.devices[0].id)
-                        .expect("Device not found")
-                        .get_size(builder.devices[0], None);
-
-                    let staging =
-                        rhi::Buffer::copy::<u8>(total_size, "Staging Buffer", builder.devices);
+                    let mut staging =
+                        rhi::Buffer::copy::<u8>(256, "Staging Buffer", builder.devices);
 
                     all_executors.iter().for_each(|(d, _, cmd)| {
-                        cmd.copy_buffer_to_texture(d, &texture, &staging);
+                        //cmd.copy_buffer_to_texture(d, &texture, &staging);
+                    });
+
+                    (texture, staging)
+                }
+                ImageSource::Data(vec) => {
+                    let texture = rhi::Texture::new(
+                        256,
+                        256,
+                        dx::Format::Rgba8Unorm,
+                        1,
+                        dx::ResourceFlags::empty(),
+                        dx::ResourceStates::CopyDest,
+                        None,
+                        "Texture",
+                        builder.devices,
+                    );
+
+                    let mut staging =
+                        rhi::Buffer::copy::<u8>(vec.len(), "Staging Buffer", builder.devices);
+
+                    staging.write_all(&vec);
+
+                    all_executors.iter().for_each(|(d, _, cmd)| {
+                        //cmd.copy_buffer_to_texture(d, &texture, &staging);
                     });
 
                     (texture, staging)

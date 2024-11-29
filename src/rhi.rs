@@ -4,7 +4,6 @@ use std::{
     collections::{HashMap, VecDeque},
     ffi::CString,
     num::NonZero,
-    ops::Range,
     path::Path,
     rc::Rc,
     sync::{atomic::AtomicU64, Arc},
@@ -672,7 +671,7 @@ impl DeviceTexture {
         let desc = self.res.res.get_desc();
         device
             .gpu
-            .get_copyable_footprints(&desc, mip, 0, &mut [], &mut [], &mut [])
+            .get_copyable_footprints(&desc, mip, 0, None, None, None)
     }
 }
 
@@ -1716,9 +1715,9 @@ impl CommandBuffer {
             &desc,
             0..dst.levels,
             0,
-            &mut footprints,
-            &mut num_rows,
-            &mut row_sizes,
+            Some(&mut footprints),
+            Some(&mut num_rows),
+            Some(&mut row_sizes),
         );
 
         for i in 0..(dst.levels as usize) {
