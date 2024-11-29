@@ -1,10 +1,17 @@
-use std::{collections::HashMap, num::NonZero, rc::Rc, sync::Arc};
+mod camera;
+mod gltf;
+mod rhi;
+mod utils;
+mod timer;
+
+use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec3, Mat4};
-use gltf::{GpuDeviceMesh, GpuMesh, Mesh};
+use gltf::{GpuMesh, Mesh};
 use oxidx::dx;
 use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
+use timer::GameTimer;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -14,11 +21,6 @@ use winit::{
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::Window,
 };
-
-mod camera;
-mod gltf;
-mod rhi;
-mod utils;
 
 pub struct WindowContext {
     pub window: Window,
@@ -51,6 +53,9 @@ pub struct Application {
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
+    pub wnd_title: String,
+    pub timer: GameTimer,
+    pub app_paused: bool,
 
     pub camera: Camera,
     pub camera_controller: FpsController,
@@ -195,6 +200,9 @@ impl Application {
             device,
             camera_buffers,
             wnd_ctx: None,
+            wnd_title: "Multi-GPU Shadows Sample".to_string(),
+            timer: GameTimer::default(),
+            app_paused: false,
             curr_frame: 0,
             camera,
             camera_controller: controller,
@@ -247,7 +255,7 @@ impl Application {
 
         if direction.length() != 0.0 {
             self.camera_controller
-                .update_position(0.16, &mut self.camera, direction.normalize());
+                .update_position(self.timer.delta_time(), &mut self.camera, direction.normalize());
         }
 
         self.camera_buffers.write(
@@ -326,6 +334,35 @@ impl Application {
             swapchain,
         });
     }
+
+    fn calculate_frame_stats(&self) {
+        thread_local! {
+            static FRAME_COUNT: RefCell<i32> = Default::default();
+            static TIME_ELAPSED: RefCell<f32> = Default::default();
+        }
+
+        FRAME_COUNT.with_borrow_mut(|frame_cnt| {
+            *frame_cnt += 1;
+        });
+
+        TIME_ELAPSED.with_borrow_mut(|time_elapsed| {
+            if self.timer.total_time() - *time_elapsed > 1.0 {
+                FRAME_COUNT.with_borrow_mut(|frame_count| {
+                    let fps = *frame_count as f32;
+                    let mspf = 1000.0 / fps;
+
+                    if let Some(ref context) = self.wnd_ctx {
+                        context
+                            .window
+                            .set_title(&format!("{} Fps: {fps} Ms: {mspf}", self.wnd_title))
+                    }
+
+                    *frame_count = 0;
+                    *time_elapsed += 1.0;
+                });
+            }
+        })
+    }
 }
 
 impl Drop for Application {
@@ -339,7 +376,7 @@ impl Drop for Application {
 impl ApplicationHandler for Application {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
-            .with_title("Mgpu Sample")
+            .with_title(&self.wnd_title)
             .with_inner_size(PhysicalSize::new(self.window_width, self.window_height));
 
         let window = event_loop.create_window(window_attributes).unwrap();
@@ -352,15 +389,16 @@ impl ApplicationHandler for Application {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        self.timer.tick();
         match event {
-            WindowEvent::Focused(_focused) => {
-                /*if focused {
-                    self.base.app_paused = false;
-                    self.base.timer.start();
+            WindowEvent::Focused(focused) => {
+                if focused {
+                    self.app_paused = false;
+                    self.timer.start();
                 } else {
-                    self.base.app_paused = true;
-                    self.base.timer.stop();
-                }*/
+                    self.app_paused = true;
+                    self.timer.stop();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => match event.state {
                 winit::event::ElementState::Pressed => {
@@ -382,57 +420,49 @@ impl ApplicationHandler for Application {
                 let Some(ref mut context) = self.wnd_ctx else {
                     return;
                 };
-                self.window_width = size.width;
-                self.window_height = size.height;
-
-                self.device.gfx_queue.wait_idle();
-                context.swapchain.resize(
-                    &self.device,
-                    size.width,
-                    size.height,
-                    self.device.gfx_queue.fence.get_current_value(),
-                );
-                self.curr_frame = 0;
-
-                self.depth_buffer = rhi::Texture::new(
-                    &self.device,
-                    size.width,
-                    size.height,
-                    dx::Format::D24UnormS8Uint,
-                    1,
-                    dx::ResourceFlags::AllowDepthStencil,
-                    dx::ResourceStates::DepthWrite,
-                    Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
-                    "Depth Buffer",
-                );
-                self.depth_view = rhi::TextureView::new(
-                    &self.device,
-                    &self.depth_buffer,
-                    rhi::TextureViewType::DepthTarget,
-                    None,
-                );
-
-                /*let Some(ref mut context) = self.base.context else {
-                    return;
-                };
-
+                
                 if context.window.is_minimized().is_some_and(|minized| minized) {
-                    self.base.app_paused = true;
+                    self.app_paused = true;
                 } else {
-                    self.base.app_paused = false;
-                    self.base.on_resize(size.width, size.height);
-                    self.sample
-                        .on_resize(&mut self.base, size.width, size.height);
-                }*/
+                    self.app_paused = false;
+                    
+                    self.window_width = size.width;
+                    self.window_height = size.height;
+
+                    self.device.gfx_queue.wait_idle();
+                    context.swapchain.resize(
+                        &self.device,
+                        size.width,
+                        size.height,
+                        self.device.gfx_queue.fence.get_current_value(),
+                    );
+                    self.curr_frame = 0;
+
+                    self.depth_buffer = rhi::Texture::new(
+                        &self.device,
+                        size.width,
+                        size.height,
+                        dx::Format::D24UnormS8Uint,
+                        1,
+                        dx::ResourceFlags::AllowDepthStencil,
+                        dx::ResourceStates::DepthWrite,
+                        Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
+                        "Depth Buffer",
+                    );
+                    self.depth_view = rhi::TextureView::new(
+                        &self.device,
+                        &self.depth_buffer,
+                        rhi::TextureViewType::DepthTarget,
+                        None,
+                    );
+                }
             }
             WindowEvent::RedrawRequested => {
-                /*if self.base.app_paused {
-                    sleep(Duration::from_millis(100));
+                if self.app_paused {
+                    std::thread::sleep(Duration::from_millis(100));
                     return;
                 }
-                self.base.calculate_frame_stats();
-                self.sample.update(&self.base);
-                self.sample.render(&mut self.base);*/
+                self.calculate_frame_stats();
                 self.update();
                 self.render();
             }
