@@ -1,4 +1,7 @@
-use crate::rhi::{self, Device, DeviceManager, DeviceMask};
+use crate::{
+    rhi::{self, Device, DeviceManager, DeviceMask, FRAMES_IN_FLIGHT},
+    GpuMaterial, GpuTransform,
+};
 use std::{path::Path, sync::Arc};
 
 use glam::{Mat4, Vec3, Vec4};
@@ -22,7 +25,7 @@ pub struct Material {
     pub normal: MaterialSlot,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -232,16 +235,227 @@ impl<'a> mikktspace::Geometry for TangentCalcContext<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct GpuMeshBuilder<'a> {
+    pub mesh: &'a Mesh,
+    pub devices: &'a [&'a Arc<Device>],
+    pub normal_vb: DeviceMask,
+    pub uv_vb: DeviceMask,
+    pub tangent_vb: DeviceMask,
+    pub materials: DeviceMask,
+}
+
 #[derive(Debug)]
 pub struct GpuMesh {
-    pub pos_vb: rhi::DeviceBuffer,
-    pub normal_vb: Option<rhi::DeviceBuffer>,
-    pub uv_vb: Option<rhi::DeviceBuffer>,
-    pub tangent_vb: Option<rhi::DeviceBuffer>,
+    pub pos_vb: rhi::Buffer,
+    pub normal_vb: rhi::Buffer,
+    pub uv_vb: rhi::Buffer,
+    pub tangent_vb: rhi::Buffer,
 
-    pub ib: rhi::DeviceBuffer,
-    pub materials: rhi::DeviceBuffer,
-    pub transform: rhi::DeviceBuffer,
+    pub ib: rhi::Buffer,
+    pub materials: rhi::Buffer,
+    pub transform: rhi::Buffer,
 
     pub sub_meshes: Vec<Submesh>,
+}
+
+impl GpuMesh {
+    pub fn new(builder: GpuMeshBuilder<'_>) -> Self {
+        let all_executors = builder
+            .devices
+            .iter()
+            .map(|d| {
+                let queue = &d.gfx_queue;
+                let cmd_buffer = queue.get_command_buffer(d);
+                cmd_buffer.begin(&d);
+
+                (*d, queue, cmd_buffer)
+            })
+            .collect::<Vec<_>>();
+
+        let (pos_vb, _pos_vb_staging) = {
+            let mut pos_vb_staging = rhi::Buffer::copy::<[f32; 3]>(
+                builder.mesh.positions.len(),
+                "Vertex Position",
+                builder.devices,
+            );
+            pos_vb_staging.write_all(&builder.mesh.positions);
+
+            let pos_vb = rhi::Buffer::vertex::<[f32; 3]>(
+                builder.mesh.positions.len(),
+                "Vertex Position",
+                builder.devices,
+            );
+
+            all_executors.iter().for_each(|(_, _, list)| {
+                list.copy_buffer_to_buffer(&pos_vb, &pos_vb_staging);
+            });
+
+            (pos_vb, pos_vb_staging)
+        };
+
+        let (normal_vb, _normal_vb_staging) = {
+            let devices = builder
+                .devices
+                .iter()
+                .filter(|d| builder.normal_vb.contains(d.id))
+                .map(|d| *d)
+                .collect::<Vec<_>>();
+
+            let executors = all_executors
+                .iter()
+                .filter(|(d, _, _)| builder.normal_vb.contains(d.id));
+
+            let mut normal_vb_staging = rhi::Buffer::copy::<[f32; 3]>(
+                builder.mesh.normals.len(),
+                "Vertex Normal",
+                &devices,
+            );
+            normal_vb_staging.write_all(&builder.mesh.normals);
+
+            let normal_vb = rhi::Buffer::vertex::<[f32; 3]>(
+                builder.mesh.normals.len(),
+                "Vertex Normal",
+                &devices,
+            );
+
+            executors.for_each(|(_, _, list)| {
+                list.copy_buffer_to_buffer(&normal_vb, &normal_vb_staging);
+            });
+
+            (normal_vb, normal_vb_staging)
+        };
+
+        let (uv_vb, _uv_vb_staging) = {
+            let devices = builder
+                .devices
+                .iter()
+                .filter(|d| builder.uv_vb.contains(d.id))
+                .map(|d| *d)
+                .collect::<Vec<_>>();
+
+            let executors = all_executors
+                .iter()
+                .filter(|(d, _, _)| builder.uv_vb.contains(d.id));
+
+            let mut uv_vb_staging =
+                rhi::Buffer::copy::<[f32; 2]>(builder.mesh.normals.len(), "Vertex UV", &devices);
+            uv_vb_staging.write_all(&builder.mesh.uvs);
+
+            let uv_vb =
+                rhi::Buffer::vertex::<[f32; 2]>(builder.mesh.uvs.len(), "Vertex UV", &devices);
+
+            executors.for_each(|(_, _, list)| {
+                list.copy_buffer_to_buffer(&uv_vb, &uv_vb_staging);
+            });
+
+            (uv_vb, uv_vb_staging)
+        };
+
+        let (tangent_vb, _tangent_vb_staging) = {
+            let devices = builder
+                .devices
+                .iter()
+                .filter(|d| builder.tangent_vb.contains(d.id))
+                .map(|d| *d)
+                .collect::<Vec<_>>();
+
+            let executors = all_executors
+                .iter()
+                .filter(|(d, _, _)| builder.tangent_vb.contains(d.id));
+
+            let mut tangent_vb_staging = rhi::Buffer::copy::<[f32; 3]>(
+                builder.mesh.tangents.len(),
+                "Vertex Tangent",
+                &devices,
+            );
+            tangent_vb_staging.write_all(&builder.mesh.tangents);
+
+            let tangent_vb = rhi::Buffer::vertex::<[f32; 2]>(
+                builder.mesh.tangents.len(),
+                "Vertex Tangent",
+                &devices,
+            );
+
+            executors.for_each(|(_, _, list)| {
+                list.copy_buffer_to_buffer(&tangent_vb, &tangent_vb_staging);
+            });
+
+            (tangent_vb, tangent_vb_staging)
+        };
+
+        let (ib, _ib_staging) = {
+            let mut ib_staging = rhi::Buffer::copy::<u32>(
+                builder.mesh.indices.len(),
+                format!("{} Index Buffer", "check"),
+                builder.devices,
+            );
+            ib_staging.write_all(&builder.mesh.indices);
+
+            let ib = rhi::Buffer::index_u32(builder.mesh.indices.len(), "Index", builder.devices);
+
+            all_executors.iter().for_each(|(_, _, list)| {
+                list.copy_buffer_to_buffer(&ib, &ib_staging);
+            });
+
+            (ib, ib_staging)
+        };
+
+        let materials = {
+            let devices = builder
+                .devices
+                .iter()
+                .filter(|d| builder.materials.contains(d.id))
+                .map(|d| *d)
+                .collect::<Vec<_>>();
+
+            let mut materials = rhi::Buffer::constant::<GpuMaterial>(
+                builder.mesh.materials.len(),
+                "Materials Buffer",
+                &devices,
+            );
+
+            {
+                let data = builder
+                    .mesh
+                    .materials
+                    .iter()
+                    .map(|m| match m.diffuse {
+                        MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
+                        MaterialSlot::Image(_) => todo!(),
+                    })
+                    .collect::<Vec<_>>();
+
+                materials.write_all(&data);
+            }
+
+            materials
+        };
+
+        let transform = rhi::Buffer::constant::<GpuTransform>(
+            FRAMES_IN_FLIGHT,
+            "Transform Buffer",
+            builder.devices,
+        );
+
+        let values = all_executors.into_iter().map(|(_, queue, cmd)| {
+            queue.push_cmd_buffer(cmd);
+            (queue, queue.execute())
+        });
+
+        values.for_each(|(d, v)| {
+            d.wait_on_cpu(v);
+        });
+
+        Self {
+            pos_vb,
+            normal_vb,
+            uv_vb,
+            tangent_vb,
+            ib,
+            materials,
+            transform,
+            sub_meshes: builder.mesh.sub_meshes.clone(),
+        }
+    }
 }

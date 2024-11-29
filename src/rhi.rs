@@ -1572,18 +1572,21 @@ impl CommandBuffer {
         self.list.set_pipeline_state(&pipeline.pso);
     }
 
-    pub fn set_vertex_buffers(&self, buffers: &[&DeviceBuffer]) {
+    pub fn set_vertex_buffers(&self, buffers: &[&Buffer]) {
         let buffer_views = buffers
             .iter()
+            .filter_map(|b| b.get_buffer(self.device_id))
             .map(|b| b.vbv.expect("Expected vertex buffer"))
             .collect::<Vec<_>>();
 
         self.list.ia_set_vertex_buffers(0, &buffer_views);
     }
 
-    pub fn set_index_buffer(&self, buffer: &DeviceBuffer) {
-        self.list
-            .ia_set_index_buffer(Some(&buffer.ibv.expect("Expected index buffer")));
+    pub fn set_index_buffer(&self, buffer: &Buffer) {
+        if let Some(ib) = buffer.get_buffer(self.device_id) {
+            self.list
+                .ia_set_index_buffer(Some(&ib.ibv.expect("Expected index buffer")));
+        }
     }
 
     pub fn set_graphics_srv(&self, view: &TextureView, index: usize) {
@@ -1652,13 +1655,11 @@ impl CommandBuffer {
     }
 
     pub fn copy_buffer_to_buffer(&self, dst: &Buffer, src: &Buffer) {
-        let dst = dst
-            .get_buffer(self.device_id)
-            .expect("Failed to get dst buffer");
-        let src = src
-            .get_buffer(self.device_id)
-            .expect("Failed to get dst buffer");
-
-        self.list.copy_resource(&dst.res.res, &src.res.res);
+        if let (Some(dst), Some(src)) = (
+            dst.get_buffer(self.device_id),
+            src.get_buffer(self.device_id),
+        ) {
+            self.list.copy_resource(&dst.res.res, &src.res.res);
+        }
     }
 }

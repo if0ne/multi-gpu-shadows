@@ -1,14 +1,14 @@
 mod camera;
 mod gltf;
 mod rhi;
-mod utils;
 mod timer;
+mod utils;
 
 use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
 
 use camera::{Camera, FpsController, GpuCamera};
 use glam::{vec3, Mat4};
-use gltf::{GpuMesh, Mesh};
+use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use oxidx::dx;
 use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
 use timer::GameTimer;
@@ -80,63 +80,14 @@ impl Application {
 
         let model = Mesh::load("./assets/fantasy_island/scene.gltf");
 
-        let mut position_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-            model.positions.len(),
-            format!("{} Vertex Buffer", "Check"),
-            &[&device],
-        );
-        position_vertex_staging.write_all(&model.positions);
-
-        let mut normal_vertex_staging = rhi::Buffer::copy::<[f32; 3]>(
-            model.normals.len(),
-            format!("{} Vertex Buffer", "Check"),
-            &[&device],
-        );
-        normal_vertex_staging.write_all(&model.normals);
-
-        let mut index_staging = rhi::Buffer::copy::<u32>(
-            model.indices.len(),
-            format!("{} Index Buffer", "check"),
-            &[&device],
-        );
-        index_staging.write_all(&model.indices);
-
-        let position_vertex_buffer =
-            rhi::Buffer::vertex::<[f32; 3]>(model.positions.len(), "Vertex", &[&device]);
-
-        let normal_vertex_buffer =
-            rhi::Buffer::vertex::<[f32; 3]>(model.normals.len(), "Vertex", &[&device]);
-
-        let index_buffer = rhi::Buffer::index_u32(model.indices.len(), "Index", &[&device]);
-
-        let mut materials = rhi::Buffer::constant::<GpuMaterial>(
-            model.materials.len(),
-            "Materials Buffer",
-            &[&device],
-        );
-
-        {
-            let data = model
-                .materials
-                .iter()
-                .map(|m| match m.diffuse {
-                    gltf::MaterialSlot::Placeholder(mat) => GpuMaterial { diffuse: mat },
-                    gltf::MaterialSlot::Image(_) => todo!(),
-                })
-                .collect::<Vec<_>>();
-
-            materials.write_all(&data);
-        }
-
-        let cmd_list = device.gfx_queue.get_command_buffer(&device);
-        cmd_list.begin(&device);
-        cmd_list.copy_buffer_to_buffer(&position_vertex_buffer, &position_vertex_staging);
-        cmd_list.copy_buffer_to_buffer(&normal_vertex_buffer, &normal_vertex_staging);
-        cmd_list.copy_buffer_to_buffer(&index_buffer, &index_staging);
-
-        device.gfx_queue.push_cmd_buffer(cmd_list);
-        let v = device.gfx_queue.execute();
-        device.gfx_queue.wait_on_cpu(v);
+        let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
+            mesh: &model,
+            devices: &[&device],
+            normal_vb: device.id,
+            uv_vb: device.id,
+            tangent_vb: device.id,
+            materials: device.id,
+        });
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -254,8 +205,11 @@ impl Application {
         }
 
         if direction.length() != 0.0 {
-            self.camera_controller
-                .update_position(self.timer.delta_time(), &mut self.camera, direction.normalize());
+            self.camera_controller.update_position(
+                self.timer.delta_time(),
+                &mut self.camera,
+                direction.normalize(),
+            );
         }
 
         self.camera_buffers.write(
@@ -287,22 +241,34 @@ impl Application {
         list.set_graphics_pipeline(&self.pso);
         list.set_topology(rhi::GeomTopology::Triangles);
 
-        list.set_graphics_cbv(&self.camera_buffers.cbv[self.curr_frame], 0);
+        list.set_graphics_cbv(
+            &self
+                .camera_buffers
+                .get_buffer(self.device.id)
+                .expect("Not found device")
+                .cbv[self.curr_frame],
+            0,
+        );
 
-        if let Some(mesh) = self.gpu_mesh.get_gpu_mesh(list.device_id) {
-            list.set_vertex_buffers(&[&mesh.pos_vb, mesh.normal_vb.as_ref().unwrap()]);
-            list.set_index_buffer(&mesh.ib);
+        list.set_vertex_buffers(&[&self.gpu_mesh.pos_vb, &self.gpu_mesh.normal_vb]);
+        list.set_index_buffer(&self.gpu_mesh.ib);
 
-            for submesh in &mesh.sub_meshes {
-                list.set_graphics_cbv(&mesh.materials.cbv[submesh.material_idx], 1);
-                list.draw(
-                    submesh.index_count,
-                    submesh.start_index_location,
-                    submesh.base_vertex_location as i32,
-                );
-            }
+        for submesh in &self.gpu_mesh.sub_meshes {
+            list.set_graphics_cbv(
+                &self
+                    .gpu_mesh
+                    .materials
+                    .get_buffer(self.device.id)
+                    .expect("Not found device")
+                    .cbv[submesh.material_idx],
+                1,
+            );
+            list.draw(
+                submesh.index_count,
+                submesh.start_index_location,
+                submesh.base_vertex_location as i32,
+            );
         }
-
         list.set_image_barrier(texture, dx::ResourceStates::Present, None);
 
         self.device.gfx_queue.push_cmd_buffer(list);
@@ -420,12 +386,12 @@ impl ApplicationHandler for Application {
                 let Some(ref mut context) = self.wnd_ctx else {
                     return;
                 };
-                
+
                 if context.window.is_minimized().is_some_and(|minized| minized) {
                     self.app_paused = true;
                 } else {
                     self.app_paused = false;
-                    
+
                     self.window_width = size.width;
                     self.window_height = size.height;
 
