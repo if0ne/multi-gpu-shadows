@@ -265,6 +265,7 @@ pub struct GpuMesh {
     pub transform: rhi::Buffer,
 
     pub images: Vec<rhi::Texture>,
+    pub image_views: Vec<rhi::TextureView>,
 
     pub sub_meshes: Vec<Submesh>,
     pub materials: Vec<Material>,
@@ -453,10 +454,16 @@ impl GpuMesh {
             .images
             .into_iter()
             .map(|img| match img {
-                ImageSource::Path(_) => {
+                ImageSource::Path(path) => {
+                    let file = std::fs::File::open(path).expect("Failed to open texture");
+                    let reader = std::io::BufReader::new(file);
+                    let image = image::load(reader, image::ImageFormat::Png)
+                        .expect("Failed to load png")
+                        .to_rgb8();
+
                     let texture = rhi::Texture::new(
-                        256,
-                        256,
+                        image.width(),
+                        image.height(),
                         dx::Format::Rgba8Unorm,
                         1,
                         dx::ResourceFlags::empty(),
@@ -466,41 +473,25 @@ impl GpuMesh {
                         builder.devices,
                     );
 
-                    let mut staging =
-                        rhi::Buffer::copy::<u8>(256, "Staging Buffer", builder.devices);
+                    let staging =
+                        rhi::Buffer::copy::<u8>(image.len(), "Staging Buffer", builder.devices);
 
-                    all_executors.iter().for_each(|(d, _, cmd)| {
-                        //cmd.copy_buffer_to_texture(d, &texture, &staging);
+                    all_executors.iter().for_each(|(_, _, cmd)| {
+                        cmd.load_texture_from_memory(&texture, &staging, image.as_raw());
+                        cmd.set_texture_barrier(&texture, dx::ResourceStates::PixelShaderResource, None);
                     });
 
                     (texture, staging)
                 }
-                ImageSource::Data(vec) => {
-                    let texture = rhi::Texture::new(
-                        256,
-                        256,
-                        dx::Format::Rgba8Unorm,
-                        1,
-                        dx::ResourceFlags::empty(),
-                        dx::ResourceStates::CopyDest,
-                        None,
-                        "Texture",
-                        builder.devices,
-                    );
-
-                    let mut staging =
-                        rhi::Buffer::copy::<u8>(vec.len(), "Staging Buffer", builder.devices);
-
-                    staging.write_all(&vec);
-
-                    all_executors.iter().for_each(|(d, _, cmd)| {
-                        //cmd.copy_buffer_to_texture(d, &texture, &staging);
-                    });
-
-                    (texture, staging)
+                ImageSource::Data(_vec) => {
+                    todo!()
                 }
             })
             .collect::<Vec<_>>();
+
+        let image_views = images.iter().map(|(t, _)| {
+            rhi::TextureView::new(builder.devices[0], t.get_texture(builder.devices[0].id).expect("Failed to get texture"), rhi::TextureViewType::ShaderResource, None)
+        }).collect();
 
         let values = all_executors.into_iter().map(|(_, queue, cmd)| {
             queue.push_cmd_buffer(cmd);
@@ -520,6 +511,7 @@ impl GpuMesh {
             gpu_materials: materials,
             transform,
             images: images.into_iter().map(|(i, _)| i).collect(),
+            image_views,
 
             sub_meshes: builder.mesh.sub_meshes,
             materials: builder.mesh.materials,

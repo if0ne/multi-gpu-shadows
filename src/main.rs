@@ -214,7 +214,7 @@ impl Application {
 
         list.begin(&self.device);
 
-        list.set_image_barrier(texture, dx::ResourceStates::RenderTarget, None);
+        list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
         list.clear_render_target(view, 0.0, 0.0, 0.0);
         list.clear_depth_target(&self.gbuffer.depth_dsv);
 
@@ -251,7 +251,7 @@ impl Application {
                 submesh.base_vertex_location as i32,
             );
         }
-        list.set_image_barrier(texture, dx::ResourceStates::Present, None);
+        list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
 
         self.device.gfx_queue.push_cmd_buffer(list);
         *sync_point = self.device.gfx_queue.execute();

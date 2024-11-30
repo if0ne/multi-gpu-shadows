@@ -12,8 +12,8 @@ use std::{
 use fixedbitset::FixedBitSet;
 use oxidx::dx::{
     self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
-    IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList, IResource,
-    IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE,
+    IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList,
+    IGraphicsCommandListExt, IResource, IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE,
 };
 use parking_lot::Mutex;
 
@@ -1599,7 +1599,20 @@ impl CommandBuffer {
         *old_state = state;
     }
 
-    pub fn set_image_barrier(
+    pub fn set_texture_barrier(
+        &self,
+        texture: &Texture,
+        state: dx::ResourceStates,
+        mip: Option<u32>,
+    ) {
+        let Some(texture) = texture.get_texture(self.device_id) else {
+            return;
+        };
+
+        self.set_device_texture_barrier(texture, state, mip);
+    }
+
+    pub fn set_device_texture_barrier(
         &self,
         texture: &DeviceTexture,
         state: dx::ResourceStates,
@@ -1697,8 +1710,8 @@ impl CommandBuffer {
         self.list.copy_resource(&dst.res.res, &src.res.res);
     }
 
-    pub fn copy_buffer_to_texture(&self, device: &Device, dst: &Texture, src: &Buffer) {
-        let Some(src) = src.get_buffer(self.device_id) else {
+    pub fn load_texture_from_memory(&self, dst: &Texture, upload_buffer: &Buffer, data: &[u8]) {
+        let Some(upload_buffer) = upload_buffer.get_buffer(self.device_id) else {
             return;
         };
 
@@ -1706,27 +1719,13 @@ impl CommandBuffer {
             return;
         };
 
-        let desc = dst.res.res.get_desc();
-        let mut footprints = vec![dx::PlacedSubresourceFootprint::default(); dst.levels as usize];
-        let mut num_rows = vec![Default::default(); dst.levels as usize];
-        let mut row_sizes = vec![Default::default(); dst.levels as usize];
-
-        let _total_size = device.gpu.get_copyable_footprints(
-            &desc,
-            0..dst.levels,
+        self.list.update_subresources(
+            &dst.res.res,
+            &upload_buffer.res.res,
             0,
-            Some(&mut footprints),
-            Some(&mut num_rows),
-            Some(&mut row_sizes),
+            0..1,
+            &[dx::SubresourceData::new(data)],
         );
-
-        for i in 0..(dst.levels as usize) {
-            let src_copy = dx::TextureCopyLocation::placed_footprint(&src.res.res, footprints[i]);
-            let dst_copy = dx::TextureCopyLocation::subresource(&dst.res.res, i as u32);
-
-            self.list
-                .copy_texture_region(&dst_copy, 0, 0, 0, &src_copy, None);
-        }
     }
 
     pub fn copy_buffer_to_buffer(&self, dst: &Buffer, src: &Buffer) {
