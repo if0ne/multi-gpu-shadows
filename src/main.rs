@@ -387,6 +387,10 @@ impl ApplicationHandler for Application {
             .with_inner_size(PhysicalSize::new(self.window_width, self.window_height));
 
         let window = event_loop.create_window(window_attributes).unwrap();
+        window
+            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+            .expect("Failet to lock cursor");
+        window.set_cursor_visible(false);
         self.bind_window(window);
     }
 
@@ -408,6 +412,9 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::KeyboardInput { event, .. } => match event.state {
                 winit::event::ElementState::Pressed => {
+                    if event.physical_key == KeyCode::Escape {
+                        event_loop.exit();
+                    }
                     self.keys.insert(event.physical_key, true);
                 }
                 winit::event::ElementState::Released => {
