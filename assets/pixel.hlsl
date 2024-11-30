@@ -16,5 +16,5 @@ struct PixelInput
 float4 Main(PixelInput input) : SV_TARGET
 {
     float4 color = gDiffuseMap.Sample(gsamLinearClamp, input.uv) * diffuse;
-    return diffuse;
+    return float4(color.xyz, 1.0);
 }

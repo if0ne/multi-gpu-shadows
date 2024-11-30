@@ -70,6 +70,8 @@ pub struct Application {
     pub window_height: u32,
 
     pub gbuffer: Gbuffer,
+    pub diffuse_placeholder: rhi::DeviceTexture,
+    pub diffuse_placeholder_view: rhi::TextureView,
 }
 
 impl Application {
@@ -89,6 +91,46 @@ impl Application {
             tangent_vb: device.id,
             materials: device.id,
         });
+
+        let diffuse_placeholder = rhi::DeviceTexture::new(
+            &device,
+            1,
+            1,
+            dx::Format::Rgba8Unorm,
+            1,
+            dx::ResourceFlags::empty(),
+            dx::ResourceStates::CopyDest,
+            None,
+            "Texture",
+        );
+
+        let total_size = diffuse_placeholder.get_size(&device, None);
+
+        let staging = rhi::DeviceBuffer::new(
+            &device,
+            total_size,
+            0,
+            rhi::BufferType::Copy,
+            false,
+            "Staging Buffer",
+            std::any::TypeId::of::<u8>(),
+        );
+        let cmd = device.gfx_queue.get_command_buffer(&device);
+
+        cmd.load_device_texture_from_memory(&diffuse_placeholder, &staging, &[255, 255, 255, 255]);
+        cmd.set_device_texture_barrier(
+            &diffuse_placeholder,
+            dx::ResourceStates::PixelShaderResource,
+            None,
+        );
+        device.gfx_queue.push_cmd_buffer(cmd);
+        device.gfx_queue.wait_on_cpu(device.gfx_queue.execute());
+        let diffuse_placeholder_view = rhi::TextureView::new(
+            &device,
+            &diffuse_placeholder,
+            rhi::TextureViewType::ShaderResource,
+            None,
+        );
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
@@ -152,6 +194,8 @@ impl Application {
             keys: HashMap::new(),
             gbuffer,
             gpu_mesh,
+            diffuse_placeholder,
+            diffuse_placeholder_view,
         }
     }
 
@@ -257,7 +301,7 @@ impl Application {
             if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].diffuse_map {
                 list.set_graphics_srv(&self.gpu_mesh.image_views[map], 2);
             } else {
-                list.set_graphics_srv(&self.gpu_mesh.image_views[0], 2);
+                list.set_graphics_srv(&self.diffuse_placeholder_view, 2);
             }
 
             list.draw(

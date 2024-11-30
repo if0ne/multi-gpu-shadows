@@ -1349,7 +1349,9 @@ impl DeviceBuffer {
             dx::ResourceFlags::empty()
         };
 
-        let desc = dx::ResourceDesc::buffer(size).with_flags(flags);
+        let desc = dx::ResourceDesc::buffer(size)
+            .with_layout(dx::TextureLayout::RowMajor)
+            .with_flags(flags);
 
         let res = device.create_resource(&desc, &heap_props, state, None, name);
 
@@ -1725,14 +1727,23 @@ impl CommandBuffer {
             return;
         };
 
-        self.list.update_subresources(
-            &dst.res.res,
-            &upload_buffer.res.res,
-            0,
-            0..1,
-            &[dx::SubresourceData::new(data)
-                .with_row_pitch(4 * dst.width as usize)
-                .with_slice_pitch(4 * (dst.width * dst.height) as usize)],
+        self.load_device_texture_from_memory(dst, upload_buffer, data);
+    }
+
+    pub fn load_device_texture_from_memory(
+        &self,
+        dst: &DeviceTexture,
+        upload_buffer: &DeviceBuffer,
+        data: &[u8],
+    ) {
+        debug_assert!(
+            self.list.update_subresources_fixed::<1, _, _>(
+                &dst.res.res,
+                &upload_buffer.res.res,
+                0,
+                0..1,
+                &[dx::SubresourceData::new(data).with_row_pitch(4 * dst.width as usize)],
+            ) > 0
         );
     }
 

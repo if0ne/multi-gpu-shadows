@@ -455,11 +455,7 @@ impl GpuMesh {
             .into_iter()
             .map(|img| match img {
                 ImageSource::Path(path) => {
-                    let file = std::fs::File::open(path).expect("Failed to open texture");
-                    let reader = std::io::BufReader::new(file);
-                    let image = image::load(reader, image::ImageFormat::Png)
-                        .expect("Failed to load png")
-                        .to_rgb8();
+                    let image = image::open(&path).expect("Failed to load png").to_rgba8();
 
                     let texture = rhi::Texture::new(
                         image.width(),
@@ -473,8 +469,13 @@ impl GpuMesh {
                         builder.devices,
                     );
 
+                    let total_size = texture
+                        .get_texture(builder.devices[0].id)
+                        .expect("Failed to get texture")
+                        .get_size(builder.devices[0], None);
+
                     let staging =
-                        rhi::Buffer::copy::<u8>(image.len(), "Staging Buffer", builder.devices);
+                        rhi::Buffer::copy::<u8>(total_size, "Staging Buffer", builder.devices);
 
                     all_executors.iter().for_each(|(_, _, cmd)| {
                         cmd.load_texture_from_memory(&texture, &staging, image.as_raw());
