@@ -9,12 +9,14 @@ struct VertexInput
 {
     float3 position : POSITION;
     float3 normal : NORMAL;
+    float2 uv : TEXCOORD;
 };
 
 struct PixelInput
 {
     float4 position : SV_POSITION;
     float3 normal: NORMAL;
+    float2 uv : TEXCOORD;
 };
 
 PixelInput Main(VertexInput input)
@@ -25,6 +27,7 @@ PixelInput Main(VertexInput input)
     output.position = mul(viewMatrix, worldPosition);
     output.position = mul(projectionMatrix, output.position);
     output.normal = mul(worldMatrix, float4(input.normal, 1.0)).xyz;
+    output.uv = input.uv;
 
     return output;
 }

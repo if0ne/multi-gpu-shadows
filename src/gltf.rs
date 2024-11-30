@@ -478,7 +478,11 @@ impl GpuMesh {
 
                     all_executors.iter().for_each(|(_, _, cmd)| {
                         cmd.load_texture_from_memory(&texture, &staging, image.as_raw());
-                        cmd.set_texture_barrier(&texture, dx::ResourceStates::PixelShaderResource, None);
+                        cmd.set_texture_barrier(
+                            &texture,
+                            dx::ResourceStates::PixelShaderResource,
+                            None,
+                        );
                     });
 
                     (texture, staging)
@@ -489,9 +493,18 @@ impl GpuMesh {
             })
             .collect::<Vec<_>>();
 
-        let image_views = images.iter().map(|(t, _)| {
-            rhi::TextureView::new(builder.devices[0], t.get_texture(builder.devices[0].id).expect("Failed to get texture"), rhi::TextureViewType::ShaderResource, None)
-        }).collect();
+        let image_views = images
+            .iter()
+            .map(|(t, _)| {
+                rhi::TextureView::new(
+                    builder.devices[0],
+                    t.get_texture(builder.devices[0].id)
+                        .expect("Failed to get texture"),
+                    rhi::TextureViewType::ShaderResource,
+                    None,
+                )
+            })
+            .collect();
 
         let values = all_executors.into_iter().map(|(_, queue, cmd)| {
             queue.push_cmd_buffer(cmd);

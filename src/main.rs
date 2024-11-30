@@ -92,7 +92,11 @@ impl Application {
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
-            &[rhi::BindingEntry::Cbv, rhi::BindingEntry::Cbv],
+            &[
+                rhi::BindingEntry::Cbv,
+                rhi::BindingEntry::Cbv,
+                rhi::BindingEntry::Srv,
+            ],
             false,
         ));
 
@@ -232,7 +236,11 @@ impl Application {
             0,
         );
 
-        list.set_vertex_buffers(&[&self.gpu_mesh.pos_vb, &self.gpu_mesh.normal_vb]);
+        list.set_vertex_buffers(&[
+            &self.gpu_mesh.pos_vb,
+            &self.gpu_mesh.normal_vb,
+            &self.gpu_mesh.uv_vb,
+        ]);
         list.set_index_buffer(&self.gpu_mesh.ib);
 
         for submesh in &self.gpu_mesh.sub_meshes {
@@ -245,6 +253,13 @@ impl Application {
                     .cbv[submesh.material_idx],
                 1,
             );
+
+            if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].diffuse_map {
+                list.set_graphics_srv(&self.gpu_mesh.image_views[map], 2);
+            } else {
+                list.set_graphics_srv(&self.gpu_mesh.image_views[0], 2);
+            }
+
             list.draw(
                 submesh.index_count,
                 submesh.start_index_location,

@@ -953,7 +953,13 @@ impl RootSignature {
             dx::RootSignatureFlags::AllowInputAssemblerInputLayout
         };
 
+        let static_samplers = [dx::StaticSamplerDesc::linear()
+            .with_address_u(dx::AddressMode::Wrap)
+            .with_address_v(dx::AddressMode::Wrap)
+            .with_address_w(dx::AddressMode::Wrap)
+            .with_shader_register(0)];
         let desc = dx::RootSignatureDesc::default()
+            .with_samplers(&static_samplers)
             .with_parameters(&parameters)
             .with_flags(flags);
 
@@ -1724,7 +1730,9 @@ impl CommandBuffer {
             &upload_buffer.res.res,
             0,
             0..1,
-            &[dx::SubresourceData::new(data)],
+            &[dx::SubresourceData::new(data)
+                .with_row_pitch(4 * dst.width as usize)
+                .with_slice_pitch(4 * (dst.width * dst.height) as usize)],
         );
     }
 
