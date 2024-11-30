@@ -7,9 +7,9 @@ mod utils;
 
 use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
 
-use camera::{Camera, FpsController, GpuCamera};
+use camera::{Camera, FpsController};
 use gbuffer::Gbuffer;
-use glam::{vec3, Mat4};
+use glam::{vec3, vec4, Mat4, Vec3, Vec4};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use oxidx::dx;
 use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
@@ -33,15 +33,39 @@ pub struct WindowContext {
 #[derive(Clone, Debug)]
 #[repr(C)]
 #[repr(align(256))]
+pub struct GpuGlobals {
+    pub view: Mat4,
+    pub proj: Mat4,
+    pub eye_pos: Vec3,
+}
+
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[repr(align(256))]
 pub struct GpuMaterial {
-    diffuse: [f32; 4],
+    pub diffuse: [f32; 4],
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 #[repr(align(256))]
 pub struct GpuTransform {
-    world: Mat4,
+    pub world: Mat4,
+}
+
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[repr(align(256))]
+pub struct GpuDirectionalLight {
+    pub strength: Vec3,
+    pub direction: Vec3,
+}
+
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[repr(align(256))]
+pub struct GpuAmbientLight {
+    pub color: Vec4,
 }
 
 pub struct Application {
@@ -52,6 +76,8 @@ pub struct Application {
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub camera_buffers: rhi::Buffer,
+    pub dir_light_buffer: rhi::Buffer,
+    pub ambient_light_buffer: rhi::Buffer,
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
@@ -138,6 +164,8 @@ impl Application {
                 rhi::BindingEntry::Cbv,
                 rhi::BindingEntry::Cbv,
                 rhi::BindingEntry::Srv,
+                rhi::BindingEntry::Cbv,
+                rhi::BindingEntry::Cbv,
             ],
             false,
         ));
@@ -175,12 +203,38 @@ impl Application {
         let controller = FpsController::new(0.003, 100.0);
 
         let camera_buffers =
-            rhi::Buffer::constant::<GpuCamera>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
+            rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
+
+        let mut dir_light_buffer = rhi::Buffer::constant::<GpuDirectionalLight>(
+            1,
+            "Directional Light Buffers",
+            &[&device],
+        );
+
+        dir_light_buffer.write(
+            0,
+            &GpuDirectionalLight {
+                strength: vec3(0.25, 0.25, 0.25),
+                direction: vec3(5.0, -1.0, -3.0),
+            },
+        );
+
+        let mut ambient_light_buffer =
+            rhi::Buffer::constant::<GpuAmbientLight>(1, "Ambient Light Buffers", &[&device]);
+
+        ambient_light_buffer.write(
+            0,
+            &GpuAmbientLight {
+                color: vec4(1.0, 1.0, 1.0, 1.0),
+            },
+        );
 
         Self {
             device_manager,
             device,
             camera_buffers,
+            dir_light_buffer,
+            ambient_light_buffer,
             wnd_ctx: None,
             wnd_title: "Multi-GPU Shadows Sample".to_string(),
             timer: GameTimer::default(),
@@ -244,10 +298,10 @@ impl Application {
 
         self.camera_buffers.write(
             self.curr_frame,
-            &GpuCamera {
-                world: glam::Mat4::from_translation(vec3(0.0, 0.0, 1.0)),
+            &GpuGlobals {
                 view: self.camera.view,
                 proj: self.camera.proj(),
+                eye_pos: self.camera_controller.position,
             },
         );
     }
@@ -278,6 +332,24 @@ impl Application {
                 .expect("Not found device")
                 .cbv[self.curr_frame],
             0,
+        );
+
+        list.set_graphics_cbv(
+            &self
+                .dir_light_buffer
+                .get_buffer(self.device.id)
+                .expect("Not found device")
+                .cbv[0],
+            3,
+        );
+
+        list.set_graphics_cbv(
+            &self
+                .ambient_light_buffer
+                .get_buffer(self.device.id)
+                .expect("Not found device")
+                .cbv[0],
+            4,
         );
 
         list.set_vertex_buffers(&[

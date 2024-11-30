@@ -1,15 +1,6 @@
 use glam::Mat4;
 
 #[derive(Clone, Debug)]
-#[repr(C)]
-#[repr(align(256))]
-pub struct GpuCamera {
-    pub world: Mat4,
-    pub view: Mat4,
-    pub proj: Mat4,
-}
-
-#[derive(Clone, Debug)]
 pub struct Camera {
     pub view: Mat4,
     pub far: f32,
@@ -30,7 +21,7 @@ pub struct FpsController {
     yaw: f32,
     pitch: f32,
 
-    position: glam::Vec3,
+    pub position: glam::Vec3,
 }
 
 impl FpsController {
