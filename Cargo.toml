@@ -12,6 +12,7 @@ gltf = { version = "1.4.1", features = ["guess_mime_type"] }
 glam = "0.29.2"
 image = "0.25.5"
 rand = "0.8"
+smallvec = "1.13.2"
 parking_lot = "0.12.3"
 mikktspace = "0.3.0"
 url = "2.5.4"

@@ -619,6 +619,7 @@ pub struct DeviceTexture {
     pub uuid: u64,
     pub width: u32,
     pub height: u32,
+    pub array: u32,
     pub levels: u32,
     pub format: dx::Format,
     pub state: RefCell<dx::ResourceStates>,
@@ -629,6 +630,7 @@ impl DeviceTexture {
         device: &Device,
         width: u32,
         height: u32,
+        array: u32,
         format: dx::Format,
         levels: u32,
         flags: dx::ResourceFlags,
@@ -643,6 +645,7 @@ impl DeviceTexture {
             .with_array_size(1)
             .with_format(format)
             .with_mip_levels(levels)
+            .with_array_size(array as u16)
             .with_layout(dx::TextureLayout::Unknown)
             .with_flags(flags);
 
@@ -659,6 +662,7 @@ impl DeviceTexture {
             uuid,
             width,
             height,
+            array,
             levels,
             format,
             state: RefCell::new(state),
@@ -684,6 +688,7 @@ impl Texture {
     pub fn new(
         width: u32,
         height: u32,
+        array: u32,
         format: dx::Format,
         levels: u32,
         flags: dx::ResourceFlags,
@@ -700,6 +705,7 @@ impl Texture {
                         &d,
                         width,
                         height,
+                        array,
                         format,
                         levels,
                         flags,
@@ -800,6 +806,78 @@ impl TextureView {
 
         Self { ty, handle }
     }
+
+    pub fn new_in_array(
+        device: &Arc<Device>,
+        format: dx::Format,
+        parent: &DeviceTexture,
+        ty: TextureViewType,
+        index: u32,
+    ) -> Self {
+        let handle = match ty {
+            TextureViewType::RenderTarget => {
+                let handle = device.rtv_heap.alloc(device);
+                device.gpu.create_render_target_view(
+                    Some(&parent.res.res),
+                    Some(&dx::RenderTargetViewDesc::texture_2d_array(
+                        format,
+                        0,
+                        0,
+                        index..(index + 1),
+                    )),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::DepthTarget => {
+                let handle = device.dsv_heap.alloc(device);
+                device.gpu.create_depth_stencil_view(
+                    Some(&parent.res.res),
+                    Some(&dx::DepthStencilViewDesc::texture_2d_array(
+                        format,
+                        0,
+                        index..(index + 1),
+                    )),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::ShaderResource => {
+                let handle = device.shader_heap.alloc(device);
+                device.gpu.create_shader_resource_view(
+                    Some(&parent.res.res),
+                    Some(&dx::ShaderResourceViewDesc::texture_2d_array(
+                        format,
+                        0,
+                        1,
+                        0.0,
+                        0,
+                        index..(index + 1),
+                    )),
+                    handle.cpu,
+                );
+                handle
+            }
+            TextureViewType::Storage => {
+                let handle = device.shader_heap.alloc(device);
+
+                device.gpu.create_unordered_access_view(
+                    Some(&parent.res.res),
+                    dx::RES_NONE,
+                    Some(&dx::UnorderedAccessViewDesc::texture_2d_array(
+                        format,
+                        0,
+                        0,
+                        index..(index + 1),
+                    )),
+                    handle.cpu,
+                );
+                handle
+            }
+        };
+
+        Self { ty, handle }
+    }
 }
 
 pub struct Swapchain {
@@ -879,6 +957,7 @@ impl Swapchain {
                 uuid: 0,
                 width,
                 height,
+                array: 1,
                 levels: 1,
                 format: dx::Format::Rgba8Unorm,
                 state: RefCell::new(dx::ResourceStates::Common),

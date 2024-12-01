@@ -1,4 +1,5 @@
 mod camera;
+mod csm;
 mod gbuffer;
 mod gltf;
 mod rhi;
@@ -8,6 +9,7 @@ mod utils;
 use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
 
 use camera::{Camera, FpsController};
+use csm::CascadedShadowMaps;
 use gbuffer::Gbuffer;
 use glam::{vec3, vec4, Mat4, Vec3, Vec4};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
@@ -104,6 +106,9 @@ pub struct Application {
 
     pub normal_placeholder: rhi::DeviceTexture,
     pub normal_placeholder_view: rhi::TextureView,
+
+    pub csm: CascadedShadowMaps,
+    pub csm_pso: rhi::GraphicsPipeline,
 }
 
 impl Application {
@@ -113,7 +118,7 @@ impl Application {
             .get_high_perf_device()
             .expect("Failed to fetch high perf gpu");
 
-        let mesh = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
+        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
 
         let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
             mesh,
@@ -126,6 +131,7 @@ impl Application {
 
         let diffuse_placeholder = rhi::DeviceTexture::new(
             &device,
+            1,
             1,
             1,
             dx::Format::Rgba8Unorm,
@@ -158,6 +164,7 @@ impl Application {
 
         let normal_placeholder = rhi::DeviceTexture::new(
             &device,
+            1,
             1,
             1,
             dx::Format::Rgba8Unorm,
@@ -236,6 +243,27 @@ impl Application {
             },
         );
 
+        let rs = Rc::new(rhi::RootSignature::new(
+            &device,
+            &[rhi::BindingEntry::Cbv],
+            false,
+        ));
+
+        let csm_vs = rhi::CompiledShader::compile("assets/csm_vert.hlsl", rhi::ShaderType::Vertex);
+        let csm_pso = rhi::GraphicsPipeline::new(
+            &device,
+            &rhi::PipelineDesc {
+                line: false,
+                depth: true,
+                depth_format: dx::Format::D32Float,
+                op: rhi::DepthOp::LessEqual,
+                wireframe: false,
+                signature: Some(rs),
+                formats: vec![],
+                shaders: HashMap::from_iter([(rhi::ShaderType::Vertex, csm_vs)]),
+            },
+        );
+
         let gbuffer = Gbuffer::new(&device, width, height);
 
         let camera = Camera {
@@ -247,6 +275,9 @@ impl Application {
         };
 
         let controller = FpsController::new(0.003, 100.0);
+
+        let mut csm = CascadedShadowMaps::new(&device, 1024, 0.5);
+        csm.update(&camera, vec3(-1.0, -1.0, -1.0));
 
         let camera_buffers =
             rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
@@ -300,6 +331,9 @@ impl Application {
             diffuse_placeholder_view,
             normal_placeholder,
             normal_placeholder_view,
+
+            csm,
+            csm_pso,
         }
     }
 
@@ -367,6 +401,36 @@ impl Application {
         list.begin(&self.device);
 
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
+
+        // csm
+        list.set_viewport(self.csm.size, self.csm.size);
+        list.set_graphics_pipeline(&self.csm_pso);
+        list.set_topology(rhi::GeomTopology::Triangles);
+        list.set_device_texture_barrier(&self.csm.texture, dx::ResourceStates::DepthWrite, None);
+
+        for i in 0..4 {
+            list.clear_depth_target(&self.csm.dsvs[i]);
+            list.set_render_targets(&[], Some(&self.csm.dsvs[i]));
+            list.set_graphics_cbv(&self.csm.gpu_csm_proj_view_buffer.cbv[i], 0);
+
+            list.set_vertex_buffers(&[&self.gpu_mesh.pos_vb]);
+            list.set_index_buffer(&self.gpu_mesh.ib);
+
+            for submesh in &self.gpu_mesh.sub_meshes {
+                list.draw(
+                    submesh.index_count,
+                    submesh.start_index_location,
+                    submesh.base_vertex_location as i32,
+                );
+            }
+        }
+        list.set_device_texture_barrier(
+            &self.csm.texture,
+            dx::ResourceStates::PixelShaderResource,
+            None,
+        );
+
+        // forward
         list.clear_render_target(view, 0.301, 0.5607, 0.675);
         list.clear_depth_target(&self.gbuffer.depth_dsv);
 

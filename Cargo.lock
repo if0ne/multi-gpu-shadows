@@ -1096,6 +1096,7 @@ dependencies = [
  "oxidx",
  "parking_lot",
  "rand",
+ "smallvec",
  "url",
  "winit",
 ]

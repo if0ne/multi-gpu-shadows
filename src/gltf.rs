@@ -466,6 +466,7 @@ impl GpuMesh {
                     let texture = rhi::Texture::new(
                         image.width(),
                         image.height(),
+                        1,
                         dx::Format::Rgba8Unorm,
                         1,
                         dx::ResourceFlags::empty(),
