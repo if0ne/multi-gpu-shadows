@@ -1,4 +1,5 @@
 Texture2D gDiffuseMap : register(t2);
+Texture2D gNormalMap : register(t5);
 SamplerState gsamLinearClamp : register(s0);
 
 cbuffer Globals : register(b0)
@@ -31,6 +32,8 @@ struct PixelInput
     float4 position : SV_POSITION;
     float3 world_pos: POSITION;
     float3 normal: NORMAL;
+    float3 tangent: TANGENT;
+    float3 bitangent : BITANGENT;
     float2 uv : TEXCOORD;
 };
 
@@ -71,7 +74,14 @@ float3 ComputeDirectionalLight(float4 diffuseAlbedo, float3 normal, float3 toEye
 float4 Main(PixelInput input) : SV_TARGET
 {
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamLinearClamp, input.uv) * Diffuse;
-    input.normal = normalize(input.normal);
+
+    float3 normalMap = gNormalMap.Sample(gsamLinearClamp, input.uv).rgb * 2.0 - 1.0;
+
+    float3 T = normalize(input.tangent);
+    float3 B = normalize(input.bitangent);
+    float3 N = normalize(input.normal);
+    float3x3 TBN = float3x3(T, B, N);
+    input.normal = normalize(mul(normalMap, TBN));
 
     float3 toEye = normalize(EyePos - input.world_pos);
     float4 ambient = AmbientLight*diffuseAlbedo;
@@ -80,5 +90,5 @@ float4 Main(PixelInput input) : SV_TARGET
 	float4 litColor = ambient + directLight;
 
 	litColor.a = diffuseAlbedo.a;
-	return litColor;
+    return litColor;
 }

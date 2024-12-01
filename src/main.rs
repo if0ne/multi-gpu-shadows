@@ -101,6 +101,9 @@ pub struct Application {
     pub gbuffer: Gbuffer,
     pub diffuse_placeholder: rhi::DeviceTexture,
     pub diffuse_placeholder_view: rhi::TextureView,
+
+    pub normal_placeholder: rhi::DeviceTexture,
+    pub normal_placeholder_view: rhi::TextureView,
 }
 
 impl Application {
@@ -152,11 +155,50 @@ impl Application {
             dx::ResourceStates::PixelShaderResource,
             None,
         );
+
+        let normal_placeholder = rhi::DeviceTexture::new(
+            &device,
+            1,
+            1,
+            dx::Format::Rgba8Unorm,
+            1,
+            dx::ResourceFlags::empty(),
+            dx::ResourceStates::CopyDest,
+            None,
+            "Texture",
+        );
+
+        let total_size = normal_placeholder.get_size(&device, None);
+
+        let staging = rhi::DeviceBuffer::new(
+            &device,
+            total_size,
+            0,
+            rhi::BufferType::Copy,
+            false,
+            "Staging Buffer",
+            std::any::TypeId::of::<u8>(),
+        );
+
+        cmd.load_device_texture_from_memory(&normal_placeholder, &staging, &[127, 127, 255, 255]);
+        cmd.set_device_texture_barrier(
+            &normal_placeholder,
+            dx::ResourceStates::PixelShaderResource,
+            None,
+        );
+
         device.gfx_queue.push_cmd_buffer(cmd);
         device.gfx_queue.wait_on_cpu(device.gfx_queue.execute());
         let diffuse_placeholder_view = rhi::TextureView::new(
             &device,
             &diffuse_placeholder,
+            rhi::TextureViewType::ShaderResource,
+            None,
+        );
+
+        let normal_placeholder_view = rhi::TextureView::new(
+            &device,
+            &normal_placeholder,
             rhi::TextureViewType::ShaderResource,
             None,
         );
@@ -169,6 +211,7 @@ impl Application {
                 rhi::BindingEntry::Srv,
                 rhi::BindingEntry::Cbv,
                 rhi::BindingEntry::Cbv,
+                rhi::BindingEntry::Srv,
             ],
             false,
         ));
@@ -182,7 +225,7 @@ impl Application {
                 line: false,
                 depth: true,
                 depth_format: dx::Format::D24UnormS8Uint,
-                op: rhi::DepthOp::Less,
+                op: rhi::DepthOp::LessEqual,
                 wireframe: false,
                 signature: Some(rs),
                 formats: vec![dx::Format::Rgba8Unorm],
@@ -255,6 +298,8 @@ impl Application {
             gpu_mesh,
             diffuse_placeholder,
             diffuse_placeholder_view,
+            normal_placeholder,
+            normal_placeholder_view,
         }
     }
 
@@ -361,6 +406,7 @@ impl Application {
             &self.gpu_mesh.pos_vb,
             &self.gpu_mesh.normal_vb,
             &self.gpu_mesh.uv_vb,
+            &self.gpu_mesh.tangent_vb,
         ]);
         list.set_index_buffer(&self.gpu_mesh.ib);
 
@@ -379,6 +425,12 @@ impl Application {
                 list.set_graphics_srv(&self.gpu_mesh.image_views[map], 2);
             } else {
                 list.set_graphics_srv(&self.diffuse_placeholder_view, 2);
+            }
+
+            if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].normal_map {
+                list.set_graphics_srv(&self.gpu_mesh.image_views[map], 5);
+            } else {
+                list.set_graphics_srv(&self.normal_placeholder_view, 5);
             }
 
             list.draw(
