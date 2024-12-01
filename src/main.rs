@@ -217,8 +217,8 @@ impl Application {
         dir_light_buffer.write(
             0,
             &GpuDirectionalLight {
-                strength: vec3(1.0, 1.0, 1.0),
-                direction: vec3(1.0, -1.0, -1.0),
+                strength: vec3(1.0, 0.81, 0.16),
+                direction: vec3(-1.0, -1.0, -1.0),
 
                 _pad: 0.0,
             },
@@ -230,7 +230,7 @@ impl Application {
         ambient_light_buffer.write(
             0,
             &GpuAmbientLight {
-                color: vec4(0.03, 0.03, 0.13, 1.0),
+                color: vec4(0.3, 0.3, 0.63, 1.0),
             },
         );
 
