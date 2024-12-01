@@ -16,6 +16,8 @@ pub enum ImageSource {
 #[derive(Clone, Debug)]
 pub struct Material {
     pub diffuse_color: [f32; 4],
+    pub fresnel_r0: f32,
+    pub roughness: f32,
     pub diffuse_map: Option<usize>,
     pub normal_map: Option<usize>,
 }
@@ -57,7 +59,7 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
 
 impl Mesh {
     pub fn load(path: impl AsRef<Path>) -> Self {
-        let (gltf, buffers, images) = gltf::import(&path).expect("Failed to open file");
+        let (gltf, buffers, _) = gltf::import(&path).expect("Failed to open file");
 
         let scene = gltf
             .default_scene()
@@ -89,6 +91,8 @@ impl Mesh {
             .materials()
             .map(|m| Material {
                 diffuse_color: m.pbr_metallic_roughness().base_color_factor(),
+                fresnel_r0: m.pbr_metallic_roughness().metallic_factor(),
+                roughness: m.pbr_metallic_roughness().roughness_factor(),
                 diffuse_map: m
                     .pbr_metallic_roughness()
                     .base_color_texture()
@@ -434,6 +438,8 @@ impl GpuMesh {
                     .iter()
                     .map(|m| GpuMaterial {
                         diffuse: m.diffuse_color,
+                        fresnel_r0: m.fresnel_r0,
+                        roughness: m.roughness,
                     })
                     .collect::<Vec<_>>();
 

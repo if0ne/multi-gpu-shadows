@@ -44,6 +44,8 @@ pub struct GpuGlobals {
 #[repr(align(256))]
 pub struct GpuMaterial {
     pub diffuse: [f32; 4],
+    pub fresnel_r0: f32,
+    pub roughness: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +60,7 @@ pub struct GpuTransform {
 #[repr(align(256))]
 pub struct GpuDirectionalLight {
     pub strength: Vec3,
+    pub _pad: f32,
     pub direction: Vec3,
 }
 
@@ -214,8 +217,10 @@ impl Application {
         dir_light_buffer.write(
             0,
             &GpuDirectionalLight {
-                strength: vec3(0.25, 0.25, 0.25),
-                direction: vec3(5.0, -1.0, -3.0),
+                strength: vec3(1.0, 1.0, 1.0),
+                direction: vec3(1.0, -1.0, -1.0),
+
+                _pad: 0.0,
             },
         );
 
@@ -225,7 +230,7 @@ impl Application {
         ambient_light_buffer.write(
             0,
             &GpuAmbientLight {
-                color: vec4(1.0, 1.0, 1.0, 1.0),
+                color: vec4(0.03, 0.03, 0.13, 1.0),
             },
         );
 
@@ -317,7 +322,7 @@ impl Application {
         list.begin(&self.device);
 
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
-        list.clear_render_target(view, 0.0, 0.0, 0.0);
+        list.clear_render_target(view, 0.301, 0.5607, 0.675);
         list.clear_depth_target(&self.gbuffer.depth_dsv);
 
         list.set_render_targets(&[view], Some(&self.gbuffer.depth_dsv));

@@ -580,7 +580,7 @@ impl CommandQueue {
 
         CommandBuffer {
             device_id: device.id,
-            ty: self.ty,
+            _ty: self.ty,
             list,
             allocator,
         }
@@ -1005,8 +1005,15 @@ impl CompiledShader {
             ShaderType::Pixel => c"ps_5_0",
         };
 
-        let raw = dx::Blob::compile_from_file(path, &[], c"Main", target, 0, 0)
-            .expect("Failed to compile a shader");
+        let raw = dx::Blob::compile_from_file(
+            path,
+            &[],
+            c"Main",
+            target,
+            dx::COMPILE_DEBUG | dx::COMPILE_SKIP_OPT,
+            0,
+        )
+        .expect("Failed to compile a shader");
 
         Self { ty, raw }
     }
@@ -1123,7 +1130,7 @@ impl GraphicsPipeline {
                     } else {
                         dx::FillMode::Solid
                     })
-                    .with_cull_mode(dx::CullMode::None),
+                    .with_cull_mode(dx::CullMode::Back),
             )
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
@@ -1567,7 +1574,7 @@ impl GeomTopology {
 #[derive(Debug)]
 pub struct CommandBuffer {
     pub(crate) device_id: DeviceMask,
-    pub(crate) ty: dx::CommandListType,
+    pub(crate) _ty: dx::CommandListType,
     pub(crate) list: dx::GraphicsCommandList,
     pub(crate) allocator: CommandAllocatorEntry,
 }

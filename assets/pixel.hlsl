@@ -11,6 +11,8 @@ cbuffer Globals : register(b0)
 cbuffer Mat : register(b1)
 {
     float4 Diffuse;
+    float FresnelR0;
+    float Roughness;
 }
 
 cbuffer DirectionalLight : register(b3)
@@ -43,11 +45,11 @@ float3 SchlickFresnel(float3 R0, float3 normal, float3 lightVec)
 
 float3 BlinnPhong(float4 diffuseAlbedo, float3 lightStrength, float3 lightVec, float3 normal, float3 toEye)
 {
-    const float m = 0.5 * 256.0f;
+    const float m = (1.0 - Roughness) * 256.0f;
     float3 halfVec = normalize(toEye + lightVec);
 
     float roughnessFactor = (m + 8.0f)*pow(max(dot(halfVec, normal), 0.0f), m) / 8.0f;
-    float3 fresnelFactor = SchlickFresnel(0.5, halfVec, lightVec);
+    float3 fresnelFactor = SchlickFresnel(FresnelR0, halfVec, lightVec);
 
     float3 specAlbedo = fresnelFactor*roughnessFactor;
 
