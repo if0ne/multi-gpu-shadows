@@ -1395,31 +1395,6 @@ impl Buffer {
         self.buffers.iter().find(|b| b.res.device_id.eq(&device_id))
     }
 
-    pub fn constant<T: Clone + 'static>(
-        count: usize,
-        name: impl AsRef<str>,
-        devices: &[&Arc<Device>],
-    ) -> Self {
-        const { assert!(align_of::<T>() == 256) };
-
-        let size = size_of::<T>() * count;
-        let mut buffer = Self::new(
-            size,
-            0,
-            BufferType::Constant,
-            false,
-            name,
-            TypeId::of::<T>(),
-            devices,
-        );
-
-        for (d, b) in devices.iter().zip(buffer.buffers.iter_mut()) {
-            b.build_constant(d, count, size_of::<T>());
-        }
-
-        buffer
-    }
-
     pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {
         self.buffers
             .iter_mut()
@@ -1432,46 +1407,52 @@ impl Buffer {
             .for_each(|buffer| buffer.write_all(data));
     }
 
+    pub fn constant<T: Clone + 'static>(
+        count: usize,
+        name: impl AsRef<str>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| {
+                    let mut b = DeviceBuffer::constant::<T>(d, count, &name);
+                    b.build_constant(d, count, size_of::<T>());
+                    b
+                })
+                .collect(),
+        }
+    }
+
     pub fn vertex<T: Clone + 'static>(
         count: usize,
         name: impl AsRef<str>,
         devices: &[&Arc<Device>],
     ) -> Self {
-        let size = size_of::<T>() * count;
-
-        Self::new(
-            size,
-            size_of::<T>(),
-            BufferType::Vertex,
-            false,
-            name,
-            TypeId::of::<T>(),
-            devices,
-        )
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| DeviceBuffer::vertex::<T>(d, count, &name))
+                .collect(),
+        }
     }
 
     pub fn index_u16(count: usize, name: impl AsRef<str>, devices: &[&Arc<Device>]) -> Self {
-        Self::new(
-            size_of::<u16>() * count,
-            size_of::<u16>(),
-            BufferType::Index,
-            false,
-            name,
-            TypeId::of::<u16>(),
-            devices,
-        )
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| DeviceBuffer::index_u16(d, count, &name))
+                .collect(),
+        }
     }
 
     pub fn index_u32(count: usize, name: impl AsRef<str>, devices: &[&Arc<Device>]) -> Self {
-        Self::new(
-            size_of::<u32>() * count,
-            size_of::<u32>(),
-            BufferType::Index,
-            false,
-            name,
-            TypeId::of::<u32>(),
-            devices,
-        )
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| DeviceBuffer::index_u32(d, count, &name))
+                .collect(),
+        }
     }
 
     pub fn copy<T: Clone + 'static>(
@@ -1479,17 +1460,12 @@ impl Buffer {
         name: impl AsRef<str>,
         devices: &[&Arc<Device>],
     ) -> Self {
-        let size = size_of::<T>() * count;
-
-        Self::new(
-            size,
-            0,
-            BufferType::Copy,
-            false,
-            name,
-            TypeId::of::<T>(),
-            devices,
-        )
+        Self {
+            buffers: devices
+                .iter()
+                .map(|d| DeviceBuffer::copy::<T>(d, count, &name))
+                .collect(),
+        }
     }
 }
 
@@ -1599,6 +1575,89 @@ impl DeviceBuffer {
 
         let mapped = self.map::<T>();
         mapped.pointer.clone_from_slice(data);
+    }
+
+    pub fn constant<T: Clone + 'static>(
+        device: &Arc<Device>,
+        count: usize,
+        name: impl AsRef<str>,
+    ) -> Self {
+        const { assert!(align_of::<T>() == 256) };
+
+        let size = size_of::<T>() * count;
+        let mut buffer = Self::new(
+            &device,
+            size,
+            0,
+            BufferType::Constant,
+            false,
+            name.as_ref(),
+            TypeId::of::<T>(),
+        );
+
+        buffer.build_constant(device, count, size_of::<T>());
+
+        buffer
+    }
+
+    pub fn vertex<T: Clone + 'static>(
+        device: &Arc<Device>,
+        count: usize,
+        name: impl AsRef<str>,
+    ) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            &device,
+            size,
+            size_of::<T>(),
+            BufferType::Vertex,
+            false,
+            name.as_ref(),
+            TypeId::of::<T>(),
+        )
+    }
+
+    pub fn index_u16(device: &Arc<Device>, count: usize, name: impl AsRef<str>) -> Self {
+        Self::new(
+            &device,
+            size_of::<u16>() * count,
+            size_of::<u16>(),
+            BufferType::Index,
+            false,
+            name.as_ref(),
+            TypeId::of::<u16>(),
+        )
+    }
+
+    pub fn index_u32(device: &Arc<Device>, count: usize, name: impl AsRef<str>) -> Self {
+        Self::new(
+            &device,
+            size_of::<u32>() * count,
+            size_of::<u32>(),
+            BufferType::Index,
+            false,
+            name.as_ref(),
+            TypeId::of::<u32>(),
+        )
+    }
+
+    pub fn copy<T: Clone + 'static>(
+        device: &Arc<Device>,
+        count: usize,
+        name: impl AsRef<str>,
+    ) -> Self {
+        let size = size_of::<T>() * count;
+
+        Self::new(
+            device,
+            size,
+            0,
+            BufferType::Copy,
+            false,
+            name,
+            TypeId::of::<T>(),
+        )
     }
 
     pub fn build_constant(&mut self, device: &Arc<Device>, count: usize, object_size: usize) {

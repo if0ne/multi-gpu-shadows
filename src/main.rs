@@ -84,8 +84,8 @@ pub struct Application {
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub camera_buffers: rhi::Buffer,
-    pub dir_light_buffer: rhi::Buffer,
-    pub ambient_light_buffer: rhi::Buffer,
+    pub dir_light_buffer: rhi::DeviceBuffer,
+    pub ambient_light_buffer: rhi::DeviceBuffer,
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
@@ -354,15 +354,15 @@ impl Application {
         let camera_buffers =
             rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
 
-        let mut dir_light_buffer = rhi::Buffer::constant::<GpuDirectionalLight>(
+        let mut dir_light_buffer = rhi::DeviceBuffer::constant::<GpuDirectionalLight>(
+            &device,
             1,
             "Directional Light Buffers",
-            &[&device],
         );
 
         dir_light_buffer.write(
             0,
-            &GpuDirectionalLight {
+            GpuDirectionalLight {
                 strength: vec3(1.0, 0.81, 0.16),
                 direction: vec3(-1.0, -1.0, -1.0),
 
@@ -371,11 +371,11 @@ impl Application {
         );
 
         let mut ambient_light_buffer =
-            rhi::Buffer::constant::<GpuAmbientLight>(1, "Ambient Light Buffers", &[&device]);
+            rhi::DeviceBuffer::constant::<GpuAmbientLight>(&device, 1, "Ambient Light Buffers");
 
         ambient_light_buffer.write(
             0,
-            &GpuAmbientLight {
+            GpuAmbientLight {
                 color: vec4(0.3, 0.3, 0.63, 1.0),
             },
         );
@@ -520,24 +520,8 @@ impl Application {
             0,
         );
 
-        list.set_graphics_cbv(
-            &self
-                .dir_light_buffer
-                .get_buffer(self.device.id)
-                .expect("Not found device")
-                .cbv[0],
-            2,
-        );
-
-        list.set_graphics_cbv(
-            &self
-                .ambient_light_buffer
-                .get_buffer(self.device.id)
-                .expect("Not found device")
-                .cbv[0],
-            3,
-        );
-
+        list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 2);
+        list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 3);
         list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[0], 4);
 
         list.set_graphics_srv(&self.csm.srv, 2);
