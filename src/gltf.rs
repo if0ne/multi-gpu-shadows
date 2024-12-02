@@ -505,11 +505,13 @@ impl GpuMesh {
             .iter()
             .map(|(t, _)| {
                 rhi::TextureView::new(
-                    builder.devices[0],
+                    &t,
                     t.get_texture(builder.devices[0].id)
-                        .expect("Failed to get texture"),
+                        .expect("Failet to get texture")
+                        .format,
                     rhi::TextureViewType::ShaderResource,
                     None,
+                    builder.devices,
                 )
             })
             .collect();

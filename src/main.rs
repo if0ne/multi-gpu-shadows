@@ -105,10 +105,10 @@ pub struct Application {
 
     pub gbuffer: Gbuffer,
     pub diffuse_placeholder: rhi::DeviceTexture,
-    pub diffuse_placeholder_view: rhi::TextureView,
+    pub diffuse_placeholder_view: rhi::DeviceTextureView,
 
     pub normal_placeholder: rhi::DeviceTexture,
-    pub normal_placeholder_view: rhi::TextureView,
+    pub normal_placeholder_view: rhi::DeviceTextureView,
 
     pub csm: CascadedShadowMaps,
     pub csm_pso: rhi::RasterPipeline,
@@ -199,16 +199,18 @@ impl Application {
 
         device.gfx_queue.push_cmd_buffer(cmd);
         device.gfx_queue.wait_on_cpu(device.gfx_queue.execute());
-        let diffuse_placeholder_view = rhi::TextureView::new(
+        let diffuse_placeholder_view = rhi::DeviceTextureView::new(
             &device,
             &diffuse_placeholder,
+            diffuse_placeholder.format,
             rhi::TextureViewType::ShaderResource,
             None,
         );
 
-        let normal_placeholder_view = rhi::TextureView::new(
+        let normal_placeholder_view = rhi::DeviceTextureView::new(
             &device,
             &normal_placeholder,
+            normal_placeholder.format,
             rhi::TextureViewType::ShaderResource,
             None,
         );
@@ -545,13 +547,23 @@ impl Application {
             );
 
             if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].diffuse_map {
-                list.set_graphics_srv(&self.gpu_mesh.image_views[map], 2);
+                list.set_graphics_srv(
+                    &self.gpu_mesh.image_views[map]
+                        .get_view(self.device.id)
+                        .expect("Not found texture view"),
+                    2,
+                );
             } else {
                 list.set_graphics_srv(&self.diffuse_placeholder_view, 2);
             }
 
             if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].normal_map {
-                list.set_graphics_srv(&self.gpu_mesh.image_views[map], 5);
+                list.set_graphics_srv(
+                    &self.gpu_mesh.image_views[map]
+                        .get_view(self.device.id)
+                        .expect("Not found texture view"),
+                    5,
+                );
             } else {
                 list.set_graphics_srv(&self.normal_placeholder_view, 5);
             }

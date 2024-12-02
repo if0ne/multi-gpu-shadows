@@ -31,8 +31,8 @@ pub struct CascadedShadowMaps {
     pub gpu_csm_buffer: rhi::DeviceBuffer,
     pub gpu_csm_proj_view_buffer: rhi::DeviceBuffer,
     pub texture: rhi::DeviceTexture,
-    pub dsvs: [rhi::TextureView; 4],
-    pub srvs: [rhi::TextureView; 4],
+    pub dsvs: [rhi::DeviceTextureView; 4],
+    pub srvs: [rhi::DeviceTextureView; 4],
 }
 
 impl CascadedShadowMaps {
@@ -73,20 +73,20 @@ impl CascadedShadowMaps {
         gpu_csm_proj_view_buffer.build_constant(device, 4, size_of::<GpuCSMProjView>());
 
         let dsvs = std::array::from_fn(|i| {
-            rhi::TextureView::new_in_array(
+            rhi::DeviceTextureView::new_in_array(
                 device,
-                dx::Format::D32Float,
                 &texture,
+                dx::Format::D32Float,
                 rhi::TextureViewType::DepthTarget,
                 i as u32,
             )
         });
 
         let srvs = std::array::from_fn(|i| {
-            rhi::TextureView::new_in_array(
+            rhi::DeviceTextureView::new_in_array(
                 device,
-                dx::Format::R32Float,
                 &texture,
+                dx::Format::R32Float,
                 rhi::TextureViewType::ShaderResource,
                 i as u32,
             )

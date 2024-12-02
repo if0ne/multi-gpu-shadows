@@ -736,14 +736,69 @@ pub enum TextureViewType {
 
 #[derive(Debug)]
 pub struct TextureView {
-    pub ty: TextureViewType,
-    pub handle: Descriptor,
+    pub views: Vec<DeviceTextureView>,
 }
 
 impl TextureView {
     pub fn new(
+        parent: &Texture,
+        format: dx::Format,
+        ty: TextureViewType,
+        mip: Option<u32>,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        Self {
+            views: devices
+                .iter()
+                .map(|d| {
+                    let parent = parent
+                        .get_texture(d.id)
+                        .expect("Can not create texture view for this texture");
+
+                    DeviceTextureView::new(d, parent, format, ty, mip)
+                })
+                .collect(),
+        }
+    }
+
+    pub fn new_in_array(
+        parent: &Texture,
+        format: dx::Format,
+        ty: TextureViewType,
+        index: u32,
+        devices: &[&Arc<Device>],
+    ) -> Self {
+        Self {
+            views: devices
+                .iter()
+                .map(|d| {
+                    let parent = parent
+                        .get_texture(d.id)
+                        .expect("Can not create texture view for this texture");
+
+                    DeviceTextureView::new_in_array(d, parent, format, ty, index)
+                })
+                .collect(),
+        }
+    }
+
+    pub fn get_view(&self, device_id: DeviceMask) -> Option<&'_ DeviceTextureView> {
+        self.views.iter().find(|b| b.device_id.eq(&device_id))
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceTextureView {
+    pub device_id: DeviceMask,
+    pub ty: TextureViewType,
+    pub handle: Descriptor,
+}
+
+impl DeviceTextureView {
+    pub fn new(
         device: &Arc<Device>,
         parent: &DeviceTexture,
+        format: dx::Format,
         ty: TextureViewType,
         mip: Option<u32>,
     ) -> Self {
@@ -805,13 +860,17 @@ impl TextureView {
             }
         };
 
-        Self { ty, handle }
+        Self {
+            device_id: device.id,
+            ty,
+            handle,
+        }
     }
 
     pub fn new_in_array(
         device: &Arc<Device>,
-        format: dx::Format,
         parent: &DeviceTexture,
+        format: dx::Format,
         ty: TextureViewType,
         index: u32,
     ) -> Self {
@@ -877,14 +936,18 @@ impl TextureView {
             }
         };
 
-        Self { ty, handle }
+        Self {
+            device_id: device.id,
+            ty,
+            handle,
+        }
     }
 }
 
 pub struct Swapchain {
     pub swapchain: dx::Swapchain1,
     pub hwnd: NonZero<isize>,
-    pub resources: Vec<(dx::Resource, DeviceTexture, TextureView, u64)>,
+    pub resources: Vec<(dx::Resource, DeviceTexture, DeviceTextureView, u64)>,
     pub width: u32,
     pub height: u32,
 }
@@ -964,7 +1027,13 @@ impl Swapchain {
                 state: RefCell::new(dx::ResourceStates::Common),
             };
 
-            let view = TextureView::new(device, &texture, TextureViewType::RenderTarget, None);
+            let view = DeviceTextureView::new(
+                device,
+                &texture,
+                texture.format,
+                TextureViewType::RenderTarget,
+                None,
+            );
 
             self.resources.push((res, texture, view, sync_point));
         }
@@ -1717,7 +1786,11 @@ impl CommandBuffer {
         ]);
     }
 
-    pub fn set_render_targets(&self, views: &[&TextureView], depth: Option<&TextureView>) {
+    pub fn set_render_targets(
+        &self,
+        views: &[&DeviceTextureView],
+        depth: Option<&DeviceTextureView>,
+    ) {
         let rtvs = views.iter().map(|view| view.handle.cpu).collect::<Vec<_>>();
 
         let dsv = depth.map(|view| view.handle.cpu);
@@ -1781,12 +1854,12 @@ impl CommandBuffer {
         *old_state = state;
     }
 
-    pub fn clear_render_target(&self, view: &TextureView, r: f32, g: f32, b: f32) {
+    pub fn clear_render_target(&self, view: &DeviceTextureView, r: f32, g: f32, b: f32) {
         self.list
             .clear_render_target_view(view.handle.cpu, [r, g, b, 1.0], &[]);
     }
 
-    pub fn clear_depth_target(&self, view: &TextureView) {
+    pub fn clear_depth_target(&self, view: &DeviceTextureView) {
         self.list
             .clear_depth_stencil_view(view.handle.cpu, dx::ClearFlags::Depth, 1.0, 0, &[]);
     }
@@ -1814,7 +1887,7 @@ impl CommandBuffer {
         }
     }
 
-    pub fn set_graphics_srv(&self, view: &TextureView, index: usize) {
+    pub fn set_graphics_srv(&self, view: &DeviceTextureView, index: usize) {
         self.list
             .set_graphics_root_descriptor_table(index as u32, view.handle.gpu);
     }

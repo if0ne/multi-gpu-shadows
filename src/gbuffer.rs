@@ -7,23 +7,23 @@ use crate::rhi;
 #[derive(Debug)]
 pub struct Gbuffer {
     pub diffuse: rhi::DeviceTexture,
-    pub diffuse_rtv: rhi::TextureView,
-    pub diffuse_srv: rhi::TextureView,
+    pub diffuse_rtv: rhi::DeviceTextureView,
+    pub diffuse_srv: rhi::DeviceTextureView,
 
     pub normal: rhi::DeviceTexture,
-    pub normal_rtv: rhi::TextureView,
-    pub normal_srv: rhi::TextureView,
+    pub normal_rtv: rhi::DeviceTextureView,
+    pub normal_srv: rhi::DeviceTextureView,
 
     pub material: rhi::DeviceTexture,
-    pub material_rtv: rhi::TextureView,
-    pub material_srv: rhi::TextureView,
+    pub material_rtv: rhi::DeviceTextureView,
+    pub material_srv: rhi::DeviceTextureView,
 
     pub accum: rhi::DeviceTexture,
-    pub accum_rtv: rhi::TextureView,
-    pub accum_srv: rhi::TextureView,
+    pub accum_rtv: rhi::DeviceTextureView,
+    pub accum_srv: rhi::DeviceTextureView,
 
     pub depth: rhi::DeviceTexture,
-    pub depth_dsv: rhi::TextureView,
+    pub depth_dsv: rhi::DeviceTextureView,
 }
 
 impl Gbuffer {
@@ -44,11 +44,21 @@ impl Gbuffer {
             "Diffuse Texture",
         );
 
-        let diffuse_rtv =
-            rhi::TextureView::new(device, &diffuse, rhi::TextureViewType::RenderTarget, None);
+        let diffuse_rtv = rhi::DeviceTextureView::new(
+            device,
+            &diffuse,
+            diffuse.format,
+            rhi::TextureViewType::RenderTarget,
+            None,
+        );
 
-        let diffuse_srv =
-            rhi::TextureView::new(device, &diffuse, rhi::TextureViewType::ShaderResource, None);
+        let diffuse_srv = rhi::DeviceTextureView::new(
+            device,
+            &diffuse,
+            diffuse.format,
+            rhi::TextureViewType::ShaderResource,
+            None,
+        );
 
         let normal = rhi::DeviceTexture::new(
             device,
@@ -66,11 +76,21 @@ impl Gbuffer {
             "Diffuse Texture",
         );
 
-        let normal_rtv =
-            rhi::TextureView::new(device, &normal, rhi::TextureViewType::RenderTarget, None);
+        let normal_rtv = rhi::DeviceTextureView::new(
+            device,
+            &normal,
+            normal.format,
+            rhi::TextureViewType::RenderTarget,
+            None,
+        );
 
-        let normal_srv =
-            rhi::TextureView::new(device, &normal, rhi::TextureViewType::ShaderResource, None);
+        let normal_srv = rhi::DeviceTextureView::new(
+            device,
+            &normal,
+            normal.format,
+            rhi::TextureViewType::ShaderResource,
+            None,
+        );
 
         let material = rhi::DeviceTexture::new(
             device,
@@ -88,12 +108,18 @@ impl Gbuffer {
             "Diffuse Texture",
         );
 
-        let material_rtv =
-            rhi::TextureView::new(device, &material, rhi::TextureViewType::RenderTarget, None);
-
-        let material_srv = rhi::TextureView::new(
+        let material_rtv = rhi::DeviceTextureView::new(
             device,
             &material,
+            material.format,
+            rhi::TextureViewType::RenderTarget,
+            None,
+        );
+
+        let material_srv = rhi::DeviceTextureView::new(
+            device,
+            &material,
+            material.format,
             rhi::TextureViewType::ShaderResource,
             None,
         );
@@ -114,11 +140,21 @@ impl Gbuffer {
             "Diffuse Texture",
         );
 
-        let accum_rtv =
-            rhi::TextureView::new(device, &accum, rhi::TextureViewType::RenderTarget, None);
+        let accum_rtv = rhi::DeviceTextureView::new(
+            device,
+            &accum,
+            accum.format,
+            rhi::TextureViewType::RenderTarget,
+            None,
+        );
 
-        let accum_srv =
-            rhi::TextureView::new(device, &accum, rhi::TextureViewType::ShaderResource, None);
+        let accum_srv = rhi::DeviceTextureView::new(
+            device,
+            &accum,
+            accum.format,
+            rhi::TextureViewType::ShaderResource,
+            None,
+        );
 
         let depth = rhi::DeviceTexture::new(
             &device,
@@ -133,8 +169,13 @@ impl Gbuffer {
             "Depth Buffer",
         );
 
-        let depth_dsv =
-            rhi::TextureView::new(&device, &depth, rhi::TextureViewType::DepthTarget, None);
+        let depth_dsv = rhi::DeviceTextureView::new(
+            &device,
+            &depth,
+            depth.format,
+            rhi::TextureViewType::DepthTarget,
+            None,
+        );
 
         Self {
             diffuse,
