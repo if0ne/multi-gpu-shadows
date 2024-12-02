@@ -1,6 +1,9 @@
-Texture2D gDiffuseMap : register(t2);
-Texture2D gNormalMap : register(t5);
+Texture2D gDiffuseMap : register(t0);
+Texture2D gNormalMap : register(t1);
+Texture2DArray gCSM : register(t2);
+
 SamplerState gsamLinearClamp : register(s0);
+SamplerState gsamShadow : register(s1);
 
 cbuffer Globals : register(b0)
 {
@@ -16,15 +19,21 @@ cbuffer Mat : register(b1)
     float Roughness;
 }
 
-cbuffer DirectionalLight : register(b3)
+cbuffer DirectionalLight : register(b2)
 {
     float3 Strength;
     float3 Direction;
 }
 
-cbuffer AmbientLight : register(b4)
+cbuffer AmbientLight : register(b3)
 {
     float4 AmbientLight;
+}
+
+cbuffer CsmData : register(b4)
+{
+    matrix ShadowProjView[4];
+    float4 ShadowDistances;
 }
 
 struct PixelInput
@@ -71,10 +80,23 @@ float3 ComputeDirectionalLight(float4 diffuseAlbedo, float3 normal, float3 toEye
     return BlinnPhong(diffuseAlbedo, lightStrength, lightVec, normal, toEye);
 }
 
+float CalcShadowFactor(float4 shadowPosH, int cascadeIndex)
+{
+    float3 projCoords = shadowPosH.xyz / shadowPosH.w;
+
+    projCoords.x = projCoords.x * 0.5 + 0.5;
+    projCoords.y = -projCoords.y * 0.5 + 0.5;
+
+    float3 texCoord;
+    texCoord.xy = projCoords.xy;
+    texCoord.z = cascadeIndex;
+
+    return gCSM.SampleCmpLevelZero(gsamShadow, texCoord, projCoords.z).r;
+}
+
 float4 Main(PixelInput input) : SV_TARGET
 {
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamLinearClamp, input.uv) * Diffuse;
-
     float3 normalMap = gNormalMap.Sample(gsamLinearClamp, input.uv).rgb * 2.0 - 1.0;
 
     float3 T = normalize(input.tangent);
@@ -83,10 +105,25 @@ float4 Main(PixelInput input) : SV_TARGET
     float3x3 TBN = float3x3(T, B, N);
     input.normal = normalize(mul(normalMap, TBN));
 
+    float viewDist = length(EyePos - input.world_pos);
+    uint cascadeIndex = 0;
+
+    if (viewDist < ShadowDistances.x) {
+        cascadeIndex = 0;
+    } else if (viewDist < ShadowDistances.y) {
+        cascadeIndex = 1;
+    } else if (ShadowDistances < ShadowDistances.z) {
+        cascadeIndex = 2;
+    } else {
+        cascadeIndex = 3;
+    }
+
+    float shadowFactor = CalcShadowFactor(mul(ShadowProjView[cascadeIndex], input.world_pos), cascadeIndex);
+
     float3 toEye = normalize(EyePos - input.world_pos);
     float4 ambient = AmbientLight*diffuseAlbedo;
 
-    float4 directLight = float4(ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
+    float4 directLight = float4(shadowFactor * ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
 	float4 litColor = ambient + directLight;
 
 	litColor.a = diffuseAlbedo.a;
