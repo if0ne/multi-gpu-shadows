@@ -348,7 +348,7 @@ impl Application {
 
         let controller = FpsController::new(0.003, 100.0);
 
-        let csm = CascadedShadowMaps::new(&device, 1024, 0.5);
+        let csm = CascadedShadowMaps::new(&device, 2 * 1024, 0.5);
 
         let camera_buffers =
             rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);

@@ -121,7 +121,7 @@ float4 Main(PixelInput input) : SV_TARGET
         cascadeIndex = 3;
     }
 
-    float shadowFactor = CalcShadowFactor(mul(ShadowProjView[cascadeIndex], input.world_pos), cascadeIndex);
+    float shadowFactor = CalcShadowFactor(mul(ShadowProjView[cascadeIndex], float4(input.world_pos, 1.0)), cascadeIndex);
 
     float3 toEye = normalize(EyePos - input.world_pos);
     float4 ambient = AmbientLight*diffuseAlbedo;
