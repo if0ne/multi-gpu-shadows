@@ -87,6 +87,9 @@ float CalcShadowFactor(float4 shadowPosH, int cascadeIndex)
     projCoords.x = projCoords.x * 0.5 + 0.5;
     projCoords.y = -projCoords.y * 0.5 + 0.5;
 
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0 || projCoords.z > 1.0)
+        return 1.0;
+
     float3 texCoord;
     texCoord.xy = projCoords.xy;
     texCoord.z = cascadeIndex;
