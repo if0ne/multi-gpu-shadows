@@ -1,9 +1,12 @@
-use std::{any::TypeId, sync::Arc};
+use std::sync::Arc;
 
 use glam::{vec4, Vec4, Vec4Swizzles};
 use oxidx::dx;
 
-use crate::{camera::Camera, rhi};
+use crate::{
+    camera::Camera,
+    rhi::{self, FRAMES_IN_FLIGHT},
+};
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -50,27 +53,14 @@ impl CascadedShadowMaps {
             "CSM",
         );
 
-        let mut gpu_csm_buffer = rhi::DeviceBuffer::new(
-            &device,
-            size_of::<GpuCSM>(),
-            0,
-            rhi::BufferType::Constant,
-            false,
-            "CSM Buffer",
-            TypeId::of::<GpuCSM>(),
-        );
-        gpu_csm_buffer.build_constant(device, 1, size_of::<GpuCSM>());
+        let gpu_csm_buffer =
+            rhi::DeviceBuffer::constant::<GpuCSM>(&device, FRAMES_IN_FLIGHT, "CSM Buffer");
 
-        let mut gpu_csm_proj_view_buffer = rhi::DeviceBuffer::new(
+        let gpu_csm_proj_view_buffer = rhi::DeviceBuffer::constant::<GpuCSMProjView>(
             &device,
-            4 * size_of::<GpuCSMProjView>(),
-            0,
-            rhi::BufferType::Constant,
-            false,
+            FRAMES_IN_FLIGHT * 4,
             "CSM Proj View Buffer",
-            TypeId::of::<GpuCSMProjView>(),
         );
-        gpu_csm_proj_view_buffer.build_constant(device, 4, size_of::<GpuCSMProjView>());
 
         let dsvs = std::array::from_fn(|i| {
             let i = i as u32;
@@ -104,7 +94,7 @@ impl CascadedShadowMaps {
         }
     }
 
-    pub fn update(&mut self, camera: &Camera, light_dir: glam::Vec3) {
+    pub fn update(&mut self, camera: &Camera, light_dir: glam::Vec3, frame_index: usize) {
         let cascade_count = self.distances.len();
 
         for (i, distance) in self.distances.iter_mut().enumerate() {
@@ -176,7 +166,7 @@ impl CascadedShadowMaps {
         }
 
         self.gpu_csm_buffer.write(
-            0,
+            frame_index,
             GpuCSM {
                 proj_vies: self.cascade_proj_views,
                 distances: vec4(
@@ -188,10 +178,14 @@ impl CascadedShadowMaps {
             },
         );
 
-        self.gpu_csm_proj_view_buffer.write_all(
-            &self
-                .cascade_proj_views
-                .map(|pv| GpuCSMProjView { proj_vies: pv }),
-        );
+        self.cascade_proj_views
+            .iter()
+            .enumerate()
+            .for_each(|(i, pv)| {
+                self.gpu_csm_proj_view_buffer.write(
+                    i * FRAMES_IN_FLIGHT + frame_index,
+                    GpuCSMProjView { proj_vies: *pv },
+                );
+            });
     }
 }

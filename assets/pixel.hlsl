@@ -123,7 +123,7 @@ float4 Main(PixelInput input) : SV_TARGET
     float3 toEye = normalize(EyePos - input.world_pos);
     float4 ambient = AmbientLight*diffuseAlbedo;
 
-    float4 directLight = float4(ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
+    float4 directLight = float4(shadowFactor * ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
 	float4 litColor = ambient + directLight;
 
 	litColor.a = diffuseAlbedo.a;

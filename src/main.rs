@@ -257,7 +257,7 @@ impl Application {
             ty: rhi::ShaderType::Pixel,
             path: PathBuf::from("assets/pixel.hlsl"),
             entry_point: "Main".to_string(),
-            debug: false,
+            debug: true,
             defines: vec![],
         });
 
@@ -348,8 +348,7 @@ impl Application {
 
         let controller = FpsController::new(0.003, 100.0);
 
-        let mut csm = CascadedShadowMaps::new(&device, 1024, 0.5);
-        csm.update(&camera, vec3(-1.0, -1.0, -1.0));
+        let csm = CascadedShadowMaps::new(&device, 1024, 0.5);
 
         let camera_buffers =
             rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
@@ -460,6 +459,9 @@ impl Application {
                 eye_pos: self.camera_controller.position,
             },
         );
+
+        self.csm
+            .update(&self.camera, vec3(-1.0, -1.0, -1.0), self.curr_frame);
     }
 
     pub fn render(&mut self) {
@@ -483,7 +485,10 @@ impl Application {
         for i in 0..4 {
             list.clear_depth_target(&self.csm.dsvs[i]);
             list.set_render_targets(&[], Some(&self.csm.dsvs[i]));
-            list.set_graphics_cbv(&self.csm.gpu_csm_proj_view_buffer.cbv[i], 0);
+            list.set_graphics_cbv(
+                &self.csm.gpu_csm_proj_view_buffer.cbv[i * FRAMES_IN_FLIGHT + self.curr_frame],
+                0,
+            );
 
             list.set_vertex_buffers(&[&self.gpu_mesh.pos_vb]);
             list.set_index_buffer(&self.gpu_mesh.ib);
@@ -522,7 +527,7 @@ impl Application {
 
         list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 5);
         list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 6);
-        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[0], 7);
+        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[self.curr_frame], 7);
 
         list.set_graphics_srv(&self.csm.srv, 2);
 
