@@ -219,18 +219,29 @@ impl Application {
             &device,
             rhi::RootSignatureDesc {
                 entries: vec![
+                    rhi::BindingEntry::Srv { num: 1, slot: 0 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 1 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 0 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 1 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 2 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 3 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 4 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 5 },
                 ],
-                static_samplers: vec![rhi::StaticSampler {
-                    slot: 0,
-                    filter: dx::Filter::Linear,
-                    address_mode: dx::AddressMode::Wrap,
-                }],
+                static_samplers: vec![
+                    rhi::StaticSampler {
+                        slot: 0,
+                        filter: dx::Filter::Linear,
+                        address_mode: dx::AddressMode::Wrap,
+                        comp_func: dx::ComparisonFunc::None,
+                    },
+                    rhi::StaticSampler {
+                        slot: 1,
+                        filter: dx::Filter::Linear,
+                        address_mode: dx::AddressMode::Wrap,
+                        comp_func: dx::ComparisonFunc::LessEqual,
+                    },
+                ],
                 bindless: false,
             },
         ));
@@ -515,7 +526,7 @@ impl Application {
                 .get_buffer(self.device.id)
                 .expect("Not found device")
                 .cbv[0],
-            3,
+            2,
         );
 
         list.set_graphics_cbv(
@@ -524,8 +535,12 @@ impl Application {
                 .get_buffer(self.device.id)
                 .expect("Not found device")
                 .cbv[0],
-            4,
+            3,
         );
+
+        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[0], 4);
+
+        list.set_graphics_srv(&self.csm.srv, 2);
 
         list.set_vertex_buffers(&[
             &self.gpu_mesh.pos_vb,
@@ -551,10 +566,10 @@ impl Application {
                     &self.gpu_mesh.image_views[map]
                         .get_view(self.device.id)
                         .expect("Not found texture view"),
-                    2,
+                    0,
                 );
             } else {
-                list.set_graphics_srv(&self.diffuse_placeholder_view, 2);
+                list.set_graphics_srv(&self.diffuse_placeholder_view, 0);
             }
 
             if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].normal_map {
@@ -562,10 +577,10 @@ impl Application {
                     &self.gpu_mesh.image_views[map]
                         .get_view(self.device.id)
                         .expect("Not found texture view"),
-                    5,
+                    1,
                 );
             } else {
-                list.set_graphics_srv(&self.normal_placeholder_view, 5);
+                list.set_graphics_srv(&self.normal_placeholder_view, 1);
             }
 
             list.draw(

@@ -5,6 +5,7 @@ use std::{
     ffi::CString,
     hash::Hash,
     num::NonZero,
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{atomic::AtomicU64, Arc},
@@ -765,7 +766,7 @@ impl TextureView {
         parent: &Texture,
         format: dx::Format,
         ty: TextureViewType,
-        index: u32,
+        range: Range<u32>,
         devices: &[&Arc<Device>],
     ) -> Self {
         Self {
@@ -776,7 +777,7 @@ impl TextureView {
                         .get_texture(d.id)
                         .expect("Can not create texture view for this texture");
 
-                    DeviceTextureView::new_in_array(d, parent, format, ty, index)
+                    DeviceTextureView::new_in_array(d, parent, format, ty, range)
                 })
                 .collect(),
         }
@@ -872,7 +873,7 @@ impl DeviceTextureView {
         parent: &DeviceTexture,
         format: dx::Format,
         ty: TextureViewType,
-        index: u32,
+        range: Range<u32>,
     ) -> Self {
         let handle = match ty {
             TextureViewType::RenderTarget => {
@@ -880,10 +881,7 @@ impl DeviceTextureView {
                 device.gpu.create_render_target_view(
                     Some(&parent.res.res),
                     Some(&dx::RenderTargetViewDesc::texture_2d_array(
-                        format,
-                        0,
-                        0,
-                        index..(index + 1),
+                        format, 0, 0, range,
                     )),
                     handle.cpu,
                 );
@@ -894,9 +892,7 @@ impl DeviceTextureView {
                 device.gpu.create_depth_stencil_view(
                     Some(&parent.res.res),
                     Some(&dx::DepthStencilViewDesc::texture_2d_array(
-                        format,
-                        0,
-                        index..(index + 1),
+                        format, 0, range,
                     )),
                     handle.cpu,
                 );
@@ -907,12 +903,7 @@ impl DeviceTextureView {
                 device.gpu.create_shader_resource_view(
                     Some(&parent.res.res),
                     Some(&dx::ShaderResourceViewDesc::texture_2d_array(
-                        format,
-                        0,
-                        1,
-                        0.0,
-                        0,
-                        index..(index + 1),
+                        format, 0, 1, 0.0, 0, range,
                     )),
                     handle.cpu,
                 );
@@ -925,10 +916,7 @@ impl DeviceTextureView {
                     Some(&parent.res.res),
                     dx::RES_NONE,
                     Some(&dx::UnorderedAccessViewDesc::texture_2d_array(
-                        format,
-                        0,
-                        0,
-                        index..(index + 1),
+                        format, 0, 0, range,
                     )),
                     handle.cpu,
                 );
@@ -1094,6 +1082,7 @@ pub struct StaticSampler {
     pub slot: usize,
     pub filter: dx::Filter,
     pub address_mode: dx::AddressMode,
+    pub comp_func: dx::ComparisonFunc,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
