@@ -1,4 +1,4 @@
-cbuffer Globals : register(b0)
+cbuffer Globals : register(b3)
 {
     matrix viewMatrix;
     matrix projectionMatrix;
@@ -17,7 +17,6 @@ struct PixelInput
 {
     float4 position : SV_POSITION;
     float3 world_pos: POSITION;
-    float4 shadow_pos : POSITION1
     float3 normal: NORMAL;
     float3 tangent: TANGENT;
     float3 bitangent : BITANGENT;

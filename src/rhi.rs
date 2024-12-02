@@ -1,12 +1,12 @@
 use std::{
     any::TypeId,
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     ffi::CString,
     hash::Hash,
     num::NonZero,
     ops::Range,
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -14,8 +14,8 @@ use std::{
 use fixedbitset::FixedBitSet;
 use oxidx::dx::{
     self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
-    IDescriptorHeap, IDevice, IFactory4, IFactory6, IFence, IGraphicsCommandList,
-    IGraphicsCommandListExt, IResource, IShaderReflection, ISwapchain1, PSO_NONE, RES_NONE,
+    IDescriptorHeap, IDevice, IDeviceChildExt, IFactory4, IFactory6, IFence, IGraphicsCommandList,
+    IGraphicsCommandListExt, IResource, ISwapchain1, PSO_NONE, RES_NONE,
 };
 use parking_lot::Mutex;
 
@@ -256,6 +256,9 @@ impl Device {
                 clear_value.as_ref(),
             )
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
+
+        let debug_name = CString::new(name.as_bytes()).expect("Failed to create resource name");
+        res.set_debug_object_name(&debug_name).unwrap();
 
         DeviceResource {
             device_id: self.id,
@@ -777,7 +780,7 @@ impl TextureView {
                         .get_texture(d.id)
                         .expect("Can not create texture view for this texture");
 
-                    DeviceTextureView::new_in_array(d, parent, format, ty, range)
+                    DeviceTextureView::new_in_array(d, parent, format, ty, range.clone())
                 })
                 .collect(),
         }
@@ -808,7 +811,7 @@ impl DeviceTextureView {
                 let handle = device.rtv_heap.alloc(device);
                 device.gpu.create_render_target_view(
                     Some(&parent.res.res),
-                    Some(&dx::RenderTargetViewDesc::texture_2d(parent.format, 0, 0)),
+                    Some(&dx::RenderTargetViewDesc::texture_2d(format, 0, 0)),
                     handle.cpu,
                 );
                 handle
@@ -817,7 +820,7 @@ impl DeviceTextureView {
                 let handle = device.dsv_heap.alloc(device);
                 device.gpu.create_depth_stencil_view(
                     Some(&parent.res.res),
-                    Some(&dx::DepthStencilViewDesc::texture_2d(parent.format, 0)),
+                    Some(&dx::DepthStencilViewDesc::texture_2d(format, 0)),
                     handle.cpu,
                 );
                 handle
@@ -833,11 +836,7 @@ impl DeviceTextureView {
                 device.gpu.create_shader_resource_view(
                     Some(&parent.res.res),
                     Some(&dx::ShaderResourceViewDesc::texture_2d(
-                        parent.format,
-                        detailed,
-                        mip,
-                        0.0,
-                        0,
+                        format, detailed, mip, 0.0, 0,
                     )),
                     handle.cpu,
                 );
@@ -850,11 +849,7 @@ impl DeviceTextureView {
                 device.gpu.create_unordered_access_view(
                     Some(&parent.res.res),
                     dx::RES_NONE,
-                    Some(&dx::UnorderedAccessViewDesc::texture_2d(
-                        parent.format,
-                        mip,
-                        0,
-                    )),
+                    Some(&dx::UnorderedAccessViewDesc::texture_2d(format, mip, 0)),
                     handle.cpu,
                 );
                 handle
@@ -1038,11 +1033,11 @@ impl Swapchain {
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum BindingEntry {
-    Constants { size: usize, slot: usize },
-    Cbv { num: usize, slot: usize },
-    Uav { num: usize, slot: usize },
-    Srv { num: usize, slot: usize },
-    Sampler { num: usize, slot: usize },
+    Constants { size: usize, slot: u32 },
+    Cbv { num: u32, slot: u32 },
+    Uav { num: u32, slot: u32 },
+    Srv { num: u32, slot: u32 },
+    Sampler { num: u32, slot: u32 },
 }
 
 impl BindingEntry {
@@ -1056,7 +1051,7 @@ impl BindingEntry {
         }
     }
 
-    pub(crate) fn num(&self) -> usize {
+    pub(crate) fn num(&self) -> u32 {
         match *self {
             BindingEntry::Constants { .. } => unreachable!(),
             BindingEntry::Cbv { num, .. } => num,
@@ -1066,7 +1061,7 @@ impl BindingEntry {
         }
     }
 
-    pub(crate) fn slot(&self) -> usize {
+    pub(crate) fn slot(&self) -> u32 {
         match *self {
             BindingEntry::Constants { .. } => unreachable!(),
             BindingEntry::Cbv { slot, .. } => slot,
@@ -1079,7 +1074,7 @@ impl BindingEntry {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct StaticSampler {
-    pub slot: usize,
+    pub slot: u32,
     pub filter: dx::Filter,
     pub address_mode: dx::AddressMode,
     pub comp_func: dx::ComparisonFunc,
@@ -1148,17 +1143,20 @@ impl RootSignature {
                     .with_address_u(ss.address_mode)
                     .with_address_v(ss.address_mode)
                     .with_address_w(ss.address_mode)
+                    .with_comparison_func(ss.comp_func)
+                    .with_shader_register(ss.slot)
+                    .with_visibility(dx::ShaderVisibility::Pixel)
             })
             .collect::<Vec<_>>();
 
-        let desc = dx::RootSignatureDesc::default()
+        let de = dx::RootSignatureDesc::default()
             .with_samplers(&static_samplers)
             .with_parameters(&parameters)
             .with_flags(flags);
 
         let root = device
             .gpu
-            .serialize_and_create_root_signature(&desc, dx::RootSignatureVersion::V1_0, 0)
+            .serialize_and_create_root_signature(&de, dx::RootSignatureVersion::V1_0, 0)
             .expect("Failed to create root signature");
 
         Self { root, desc }
@@ -1264,7 +1262,7 @@ pub struct DepthDesc {
 pub struct InputElementDesc {
     pub semantic: dx::SemanticName,
     pub format: dx::Format,
-    pub slot: usize,
+    pub slot: u32,
 }
 
 #[derive(Debug, Hash)]
@@ -1326,7 +1324,7 @@ impl RasterPipeline {
                 dx::PipelinePrimitiveTopology::Triangle
             });
 
-        let de = if let Some(depth) = desc.depth {
+        let de = if let Some(depth) = &desc.depth {
             de.with_depth_stencil(
                 dx::DepthStencilDesc::default().enable_depth(depth.op.as_dx()),
                 depth.format,
@@ -1655,7 +1653,7 @@ impl DeviceBuffer {
             0,
             BufferType::Copy,
             false,
-            name,
+            name.as_ref(),
             TypeId::of::<T>(),
         )
     }

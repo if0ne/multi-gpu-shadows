@@ -222,11 +222,11 @@ impl Application {
                     rhi::BindingEntry::Srv { num: 1, slot: 0 },
                     rhi::BindingEntry::Srv { num: 1, slot: 1 },
                     rhi::BindingEntry::Srv { num: 1, slot: 2 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 0 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 1 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 2 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 3 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 4 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 5 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 6 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 7 },
                 ],
                 static_samplers: vec![
                     rhi::StaticSampler {
@@ -237,8 +237,8 @@ impl Application {
                     },
                     rhi::StaticSampler {
                         slot: 1,
-                        filter: dx::Filter::Linear,
-                        address_mode: dx::AddressMode::Wrap,
+                        filter: dx::Filter::ComparisonLinear,
+                        address_mode: dx::AddressMode::Border,
                         comp_func: dx::ComparisonFunc::LessEqual,
                     },
                 ],
@@ -276,7 +276,7 @@ impl Application {
                         slot: 1,
                     },
                     rhi::InputElementDesc {
-                        semantic: dx::SemanticName::Texcoord(0),
+                        semantic: dx::SemanticName::TexCoord(0),
                         format: dx::Format::Rg32Float,
                         slot: 2,
                     },
@@ -517,12 +517,12 @@ impl Application {
                 .get_buffer(self.device.id)
                 .expect("Not found device")
                 .cbv[self.curr_frame],
-            0,
+            3,
         );
 
-        list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 2);
-        list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 3);
-        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[0], 4);
+        list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 5);
+        list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 6);
+        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[0], 7);
 
         list.set_graphics_srv(&self.csm.srv, 2);
 
@@ -542,7 +542,7 @@ impl Application {
                     .get_buffer(self.device.id)
                     .expect("Not found device")
                     .cbv[submesh.material_idx],
-                1,
+                4,
             );
 
             if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].diffuse_map {

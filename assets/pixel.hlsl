@@ -3,34 +3,34 @@ Texture2D gNormalMap : register(t1);
 Texture2DArray gCSM : register(t2);
 
 SamplerState gsamLinearClamp : register(s0);
-SamplerState gsamShadow : register(s1);
+SamplerComparisonState gsamShadow : register(s1);
 
-cbuffer Globals : register(b0)
+cbuffer Globals : register(b3)
 {
     matrix ViewMatrix;
     matrix ProjectionMatrix;
     float3 EyePos;
 }
 
-cbuffer Mat : register(b1)
+cbuffer Mat : register(b4)
 {
     float4 Diffuse;
     float FresnelR0;
     float Roughness;
 }
 
-cbuffer DirectionalLight : register(b2)
+cbuffer DirectionalLight : register(b5)
 {
     float3 Strength;
     float3 Direction;
 }
 
-cbuffer AmbientLight : register(b3)
+cbuffer AmbientLight : register(b6)
 {
     float4 AmbientLight;
 }
 
-cbuffer CsmData : register(b4)
+cbuffer CsmData : register(b7)
 {
     matrix ShadowProjView[4];
     float4 ShadowDistances;
@@ -112,7 +112,7 @@ float4 Main(PixelInput input) : SV_TARGET
         cascadeIndex = 0;
     } else if (viewDist < ShadowDistances.y) {
         cascadeIndex = 1;
-    } else if (ShadowDistances < ShadowDistances.z) {
+    } else if (viewDist < ShadowDistances.z) {
         cascadeIndex = 2;
     } else {
         cascadeIndex = 3;
@@ -123,7 +123,7 @@ float4 Main(PixelInput input) : SV_TARGET
     float3 toEye = normalize(EyePos - input.world_pos);
     float4 ambient = AmbientLight*diffuseAlbedo;
 
-    float4 directLight = float4(shadowFactor * ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
+    float4 directLight = float4(ComputeDirectionalLight(diffuseAlbedo, input.normal, toEye), 1.0);
 	float4 litColor = ambient + directLight;
 
 	litColor.a = diffuseAlbedo.a;
