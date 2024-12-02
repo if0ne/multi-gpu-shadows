@@ -3,8 +3,9 @@ use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
     ffi::CString,
+    hash::Hash,
     num::NonZero,
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -978,45 +979,93 @@ impl Swapchain {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum BindingEntry {
-    Constants(usize),
-    Cbv,
-    Uav,
-    Srv,
-    Sampler,
+    Constants { size: usize, slot: usize },
+    Cbv { num: usize, slot: usize },
+    Uav { num: usize, slot: usize },
+    Srv { num: usize, slot: usize },
+    Sampler { num: usize, slot: usize },
 }
 
 impl BindingEntry {
     pub(crate) fn as_dx(&self) -> dx::DescriptorRangeType {
         match self {
-            BindingEntry::Constants(_) => unreachable!(),
-            BindingEntry::Cbv => dx::DescriptorRangeType::Cbv,
-            BindingEntry::Uav => dx::DescriptorRangeType::Uav,
-            BindingEntry::Srv => dx::DescriptorRangeType::Srv,
-            BindingEntry::Sampler => dx::DescriptorRangeType::Sampler,
+            BindingEntry::Constants { .. } => unreachable!(),
+            BindingEntry::Cbv { .. } => dx::DescriptorRangeType::Cbv,
+            BindingEntry::Uav { .. } => dx::DescriptorRangeType::Uav,
+            BindingEntry::Srv { .. } => dx::DescriptorRangeType::Srv,
+            BindingEntry::Sampler { .. } => dx::DescriptorRangeType::Sampler,
+        }
+    }
+
+    pub(crate) fn num(&self) -> usize {
+        match *self {
+            BindingEntry::Constants { .. } => unreachable!(),
+            BindingEntry::Cbv { num, .. } => num,
+            BindingEntry::Uav { num, .. } => num,
+            BindingEntry::Srv { num, .. } => num,
+            BindingEntry::Sampler { num, .. } => num,
+        }
+    }
+
+    pub(crate) fn slot(&self) -> usize {
+        match *self {
+            BindingEntry::Constants { .. } => unreachable!(),
+            BindingEntry::Cbv { slot, .. } => slot,
+            BindingEntry::Uav { slot, .. } => slot,
+            BindingEntry::Srv { slot, .. } => slot,
+            BindingEntry::Sampler { slot, .. } => slot,
         }
     }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct StaticSampler {
+    pub slot: usize,
+    pub filter: dx::Filter,
+    pub address_mode: dx::AddressMode,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct RootSignatureDesc {
+    pub entries: Vec<BindingEntry>,
+    pub static_samplers: Vec<StaticSampler>,
+    pub bindless: bool,
+}
+
+#[derive(Debug, Eq)]
 pub struct RootSignature {
     pub root: dx::RootSignature,
+    pub desc: RootSignatureDesc,
+}
+
+impl Hash for RootSignature {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.desc.hash(state);
+    }
+}
+
+impl PartialEq for RootSignature {
+    fn eq(&self, other: &Self) -> bool {
+        self.desc == other.desc
+    }
 }
 
 impl RootSignature {
-    pub fn new(device: &Device, entries: &[BindingEntry], bindless: bool) -> Self {
+    pub fn new(device: &Device, desc: RootSignatureDesc) -> Self {
         let mut parameters = vec![];
         let mut ranges = vec![];
 
-        for (i, entry) in entries.iter().enumerate() {
-            ranges.push([dx::DescriptorRange::new(entry.as_dx(), 1)
-                .with_base_shader_register(i as u32)
+        for entry in desc.entries.iter() {
+            ranges.push([dx::DescriptorRange::new(entry.as_dx(), entry.num())
+                .with_base_shader_register(entry.slot())
                 .with_register_space(0)]);
         }
 
-        for (i, entry) in entries.iter().enumerate() {
-            let parameter = if let BindingEntry::Constants(size) = entry {
-                dx::RootParameter::constant_32bit(i as u32, 0, (*size / 4) as u32)
+        for (i, entry) in desc.entries.iter().enumerate() {
+            let parameter = if let BindingEntry::Constants { size, slot } = entry {
+                dx::RootParameter::constant_32bit(*slot, 0, (*size / 4) as u32)
             } else {
                 dx::RootParameter::descriptor_table(&ranges[i])
                     .with_visibility(dx::ShaderVisibility::All)
@@ -1024,7 +1073,7 @@ impl RootSignature {
             parameters.push(parameter);
         }
 
-        let flags = if bindless {
+        let flags = if desc.bindless {
             dx::RootSignatureFlags::AllowInputAssemblerInputLayout
                 | dx::RootSignatureFlags::CbvSrvUavHeapDirectlyIndexed
                 | dx::RootSignatureFlags::SamplerHeapDirectlyIndexed
@@ -1032,11 +1081,18 @@ impl RootSignature {
             dx::RootSignatureFlags::AllowInputAssemblerInputLayout
         };
 
-        let static_samplers = [dx::StaticSamplerDesc::linear()
-            .with_address_u(dx::AddressMode::Wrap)
-            .with_address_v(dx::AddressMode::Wrap)
-            .with_address_w(dx::AddressMode::Wrap)
-            .with_shader_register(0)];
+        let static_samplers = desc
+            .static_samplers
+            .iter()
+            .map(|ss| {
+                dx::StaticSamplerDesc::default()
+                    .with_filter(ss.filter)
+                    .with_address_u(ss.address_mode)
+                    .with_address_v(ss.address_mode)
+                    .with_address_w(ss.address_mode)
+            })
+            .collect::<Vec<_>>();
+
         let desc = dx::RootSignatureDesc::default()
             .with_samplers(&static_samplers)
             .with_parameters(&parameters)
@@ -1047,11 +1103,11 @@ impl RootSignature {
             .serialize_and_create_root_signature(&desc, dx::RootSignatureVersion::V1_0, 0)
             .expect("Failed to create root signature");
 
-        Self { root }
+        Self { root, desc }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum DepthOp {
     None,
     Less,
@@ -1074,125 +1130,118 @@ pub enum ShaderType {
     Pixel,
 }
 
-pub struct CompiledShader {
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ShaderDesc {
     pub ty: ShaderType,
+    pub path: PathBuf,
+    pub entry_point: String,
+    pub debug: bool,
+    pub defines: Vec<(String, String)>,
+}
+
+#[derive(Debug, Eq)]
+pub struct CompiledShader {
     pub raw: dx::Blob,
+    pub desc: ShaderDesc,
+}
+
+impl Hash for CompiledShader {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.desc.hash(state);
+    }
+}
+
+impl PartialEq for CompiledShader {
+    fn eq(&self, other: &Self) -> bool {
+        self.desc == other.desc
+    }
 }
 
 impl CompiledShader {
-    pub fn compile(path: impl AsRef<Path>, ty: ShaderType) -> Self {
-        let target = match ty {
+    pub fn compile(desc: ShaderDesc) -> Self {
+        let target = match desc.ty {
             ShaderType::Vertex => c"vs_5_0",
             ShaderType::Pixel => c"ps_5_0",
         };
 
-        let raw = dx::Blob::compile_from_file(
-            path,
-            &[],
-            c"Main",
-            target,
-            dx::COMPILE_DEBUG | dx::COMPILE_SKIP_OPT,
-            0,
-        )
-        .expect("Failed to compile a shader");
+        let flags = if desc.debug {
+            dx::COMPILE_DEBUG | dx::COMPILE_SKIP_OPT
+        } else {
+            0
+        };
 
-        Self { ty, raw }
+        let defines = desc
+            .defines
+            .iter()
+            .map(|(k, v)| {
+                (
+                    CString::new(k.as_bytes()).expect("CString::new failed"),
+                    CString::new(v.as_bytes()).expect("CString::new failed"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let defines = defines
+            .iter()
+            .map(|(k, v)| dx::ShaderMacro::new(k, v))
+            .chain(std::iter::once(dx::ShaderMacro::default()))
+            .collect::<Vec<_>>();
+
+        let entry_point = CString::new(desc.entry_point.as_bytes()).expect("CString::new failed");
+
+        let raw = dx::Blob::compile_from_file(&desc.path, &defines, &entry_point, target, flags, 0)
+            .expect("Failed to compile a shader");
+
+        Self { raw, desc }
     }
 }
 
-pub struct PipelineDesc {
-    pub line: bool,
-    pub depth: bool,
-    pub depth_format: dx::Format,
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct DepthDesc {
     pub op: DepthOp,
-    pub wireframe: bool,
-    pub signature: Option<Rc<RootSignature>>,
-    pub formats: Vec<dx::Format>,
-    pub shaders: HashMap<ShaderType, CompiledShader>,
+    pub format: dx::Format,
 }
 
-pub struct GraphicsPipeline {
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct InputElementDesc {
+    pub semantic: dx::SemanticName,
+    pub format: dx::Format,
+    pub slot: usize,
+}
+
+#[derive(Debug, Hash)]
+pub struct RasterPipelineDesc {
+    pub input_elements: Vec<InputElementDesc>,
+    pub line: bool,
+    pub wireframe: bool,
+    pub depth: Option<DepthDesc>,
+    pub signature: Option<Rc<RootSignature>>,
+    pub formats: Vec<dx::Format>,
+    pub vs: CompiledShader,
+    pub shaders: Vec<CompiledShader>,
+}
+
+impl RasterPipelineDesc {
+    pub(crate) fn get_shader(&self, ty: ShaderType) -> Option<&CompiledShader> {
+        self.shaders.iter().find(|s| s.desc.ty == ty)
+    }
+}
+
+pub struct RasterPipeline {
     pub pso: dx::PipelineState,
     pub root_signature: Option<Rc<RootSignature>>,
 }
 
-impl GraphicsPipeline {
-    pub fn new(device: &Device, desc: &PipelineDesc) -> Self {
-        let vert = desc
-            .shaders
-            .get(&ShaderType::Vertex)
-            .expect("Not found vertex shader");
-        let pixel = desc.shaders.get(&ShaderType::Pixel);
+impl RasterPipeline {
+    pub fn new(device: &Device, desc: &RasterPipelineDesc) -> Self {
+        let vert = &desc.vs;
+        let pixel = desc.get_shader(ShaderType::Pixel);
 
-        let vert_reflection = vert.raw.reflect().expect("Failed to get reflection");
-        let vertex_desc = vert_reflection
-            .get_desc()
-            .expect("Failed to get shader reflection");
-
-        let n = vertex_desc.get_input_parameters();
-        let mut input_element_desc = vec![];
-        let mut input_sematics_name = vec![CString::new("").unwrap(); n as usize];
-
-        for i in 0..n {
-            let param_desc = vert_reflection
-                .get_input_parameter_desc(i as usize)
-                .expect("Failed fetch input parameter desc");
-
-            input_sematics_name[i as usize] = param_desc.semantic_name().to_owned();
-
-            let format = if param_desc.mask() == 1 {
-                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
-                    dx::Format::R32Uint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
-                    dx::Format::R32Sint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
-                    dx::Format::R32Float
-                } else {
-                    dx::Format::Unknown
-                }
-            } else if param_desc.mask() <= 3 {
-                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
-                    dx::Format::Rg32Uint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
-                    dx::Format::Rg32Sint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
-                    dx::Format::Rg32Float
-                } else {
-                    dx::Format::Unknown
-                }
-            } else if param_desc.mask() <= 7 {
-                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
-                    dx::Format::Rgb32Uint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
-                    dx::Format::Rgb32Sint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
-                    dx::Format::Rgb32Float
-                } else {
-                    dx::Format::Unknown
-                }
-            } else if param_desc.mask() <= 15 {
-                if param_desc.component_type() == dx::RegisterComponentType::Uint32 {
-                    dx::Format::Rgba32Uint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Sint32 {
-                    dx::Format::Rgba32Sint
-                } else if param_desc.component_type() == dx::RegisterComponentType::Float32 {
-                    dx::Format::Rgba32Float
-                } else {
-                    dx::Format::Unknown
-                }
-            } else {
-                dx::Format::Unknown
-            };
-
-            let input_element = dx::InputElementDesc::from_raw_per_vertex(
-                &input_sematics_name[i as usize],
-                param_desc.semantic_index(),
-                format,
-                i,
-            );
-
-            input_element_desc.push(input_element);
-        }
+        let input_element_desc = desc
+            .input_elements
+            .iter()
+            .map(|el| dx::InputElementDesc::per_vertex(el.semantic, el.format, el.slot))
+            .collect::<Vec<_>>();
 
         let de = dx::GraphicsPipelineDesc::new(&vert.raw)
             .with_input_layout(&input_element_desc)
@@ -1219,10 +1268,10 @@ impl GraphicsPipeline {
                 dx::PipelinePrimitiveTopology::Triangle
             });
 
-        let de = if desc.depth {
+        let de = if let Some(depth) = desc.depth {
             de.with_depth_stencil(
-                dx::DepthStencilDesc::default().enable_depth(desc.op.as_dx()),
-                desc.depth_format,
+                dx::DepthStencilDesc::default().enable_depth(depth.op.as_dx()),
+                depth.format,
             )
         } else {
             de
@@ -1742,7 +1791,7 @@ impl CommandBuffer {
             .clear_depth_stencil_view(view.handle.cpu, dx::ClearFlags::Depth, 1.0, 0, &[]);
     }
 
-    pub fn set_graphics_pipeline(&self, pipeline: &GraphicsPipeline) {
+    pub fn set_graphics_pipeline(&self, pipeline: &RasterPipeline) {
         self.list
             .set_graphics_root_signature(pipeline.root_signature.as_ref().map(|rs| &rs.root));
         self.list.set_pipeline_state(&pipeline.pso);

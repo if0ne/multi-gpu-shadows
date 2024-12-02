@@ -6,7 +6,10 @@ mod rhi;
 mod timer;
 mod utils;
 
-use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell, collections::HashMap, num::NonZero, path::PathBuf, rc::Rc, sync::Arc,
+    time::Duration,
+};
 
 use camera::{Camera, FpsController};
 use csm::CascadedShadowMaps;
@@ -93,7 +96,7 @@ pub struct Application {
     pub camera: Camera,
     pub camera_controller: FpsController,
 
-    pub pso: rhi::GraphicsPipeline,
+    pub pso: rhi::RasterPipeline,
 
     pub gpu_mesh: GpuMesh,
 
@@ -108,7 +111,7 @@ pub struct Application {
     pub normal_placeholder_view: rhi::TextureView,
 
     pub csm: CascadedShadowMaps,
-    pub csm_pso: rhi::GraphicsPipeline,
+    pub csm_pso: rhi::RasterPipeline,
 }
 
 impl Application {
@@ -212,55 +215,111 @@ impl Application {
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
-            &[
-                rhi::BindingEntry::Cbv,
-                rhi::BindingEntry::Cbv,
-                rhi::BindingEntry::Srv,
-                rhi::BindingEntry::Cbv,
-                rhi::BindingEntry::Cbv,
-                rhi::BindingEntry::Srv,
-            ],
-            false,
+            rhi::RootSignatureDesc {
+                entries: vec![
+                    rhi::BindingEntry::Cbv { num: 1, slot: 0 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 1 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 3 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 4 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 5 },
+                ],
+                static_samplers: vec![rhi::StaticSampler {
+                    slot: 0,
+                    filter: dx::Filter::Linear,
+                    address_mode: dx::AddressMode::Wrap,
+                }],
+                bindless: false,
+            },
         ));
 
-        let vs = rhi::CompiledShader::compile("assets/vert.hlsl", rhi::ShaderType::Vertex);
-        let ps = rhi::CompiledShader::compile("assets/pixel.hlsl", rhi::ShaderType::Pixel);
+        let vs = rhi::CompiledShader::compile(rhi::ShaderDesc {
+            ty: rhi::ShaderType::Vertex,
+            path: PathBuf::from("assets/vert.hlsl"),
+            entry_point: "Main".to_string(),
+            debug: false,
+            defines: vec![],
+        });
+        let ps = rhi::CompiledShader::compile(rhi::ShaderDesc {
+            ty: rhi::ShaderType::Pixel,
+            path: PathBuf::from("assets/pixel.hlsl"),
+            entry_point: "Main".to_string(),
+            debug: false,
+            defines: vec![],
+        });
 
-        let pso = rhi::GraphicsPipeline::new(
+        let pso = rhi::RasterPipeline::new(
             &device,
-            &rhi::PipelineDesc {
+            &rhi::RasterPipelineDesc {
+                input_elements: vec![
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::Position(0),
+                        format: dx::Format::Rgb32Float,
+                        slot: 0,
+                    },
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::Normal(0),
+                        format: dx::Format::Rgb32Float,
+                        slot: 1,
+                    },
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::Texcoord(0),
+                        format: dx::Format::Rg32Float,
+                        slot: 2,
+                    },
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::Tangent(0),
+                        format: dx::Format::Rgba32Float,
+                        slot: 3,
+                    },
+                ],
+                vs,
                 line: false,
-                depth: true,
-                depth_format: dx::Format::D24UnormS8Uint,
-                op: rhi::DepthOp::LessEqual,
+                depth: Some(rhi::DepthDesc {
+                    op: rhi::DepthOp::LessEqual,
+                    format: dx::Format::D24UnormS8Uint,
+                }),
                 wireframe: false,
                 signature: Some(rs),
                 formats: vec![dx::Format::Rgba8Unorm],
-                shaders: HashMap::from_iter([
-                    (rhi::ShaderType::Vertex, vs),
-                    (rhi::ShaderType::Pixel, ps),
-                ]),
+                shaders: vec![ps],
             },
         );
 
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
-            &[rhi::BindingEntry::Cbv],
-            false,
+            rhi::RootSignatureDesc {
+                entries: vec![rhi::BindingEntry::Cbv { num: 1, slot: 0 }],
+                static_samplers: vec![],
+                bindless: false,
+            },
         ));
 
-        let csm_vs = rhi::CompiledShader::compile("assets/csm_vert.hlsl", rhi::ShaderType::Vertex);
-        let csm_pso = rhi::GraphicsPipeline::new(
+        let csm_vs = rhi::CompiledShader::compile(rhi::ShaderDesc {
+            ty: rhi::ShaderType::Vertex,
+            path: PathBuf::from("assets/csm_vert.hlsl"),
+            entry_point: "Main".to_string(),
+            debug: false,
+            defines: vec![],
+        });
+        let csm_pso = rhi::RasterPipeline::new(
             &device,
-            &rhi::PipelineDesc {
+            &rhi::RasterPipelineDesc {
+                input_elements: vec![rhi::InputElementDesc {
+                    semantic: dx::SemanticName::Position(0),
+                    format: dx::Format::Rgb32Float,
+                    slot: 0,
+                }],
+                vs: csm_vs,
                 line: false,
-                depth: true,
-                depth_format: dx::Format::D32Float,
-                op: rhi::DepthOp::LessEqual,
+                depth: Some(rhi::DepthDesc {
+                    op: rhi::DepthOp::LessEqual,
+                    format: dx::Format::D32Float,
+                }),
                 wireframe: false,
                 signature: Some(rs),
                 formats: vec![],
-                shaders: HashMap::from_iter([(rhi::ShaderType::Vertex, csm_vs)]),
+                shaders: vec![],
             },
         );
 
