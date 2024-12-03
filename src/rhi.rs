@@ -11,6 +11,7 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
+use ahash::{HashSet, HashSetExt};
 use fixedbitset::FixedBitSet;
 use oxidx::dx::{
     self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
@@ -1525,13 +1526,42 @@ pub enum ShaderType {
     Pixel,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq)]
 pub struct ShaderDesc {
     pub ty: ShaderType,
     pub path: PathBuf,
     pub entry_point: String,
     pub debug: bool,
     pub defines: Vec<(String, String)>,
+}
+
+impl Hash for ShaderDesc {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let mut set: HashSet<&(String, String)> = HashSet::new();
+        for pair in &self.defines {
+            set.insert(pair);
+        }
+
+        let mut sorted: Vec<_> = set.iter().collect();
+        sorted.sort_by(|a, b| a.cmp(b));
+
+        for pair in sorted {
+            pair.hash(state);
+        }
+    }
+}
+
+impl PartialEq for ShaderDesc {
+    fn eq(&self, other: &Self) -> bool {
+        let set_self: HashSet<_> = self.defines.iter().collect();
+        let set_other: HashSet<_> = other.defines.iter().collect();
+
+        self.ty == other.ty
+            && self.path == other.path
+            && self.entry_point == other.entry_point
+            && self.debug == other.debug
+            && set_self == set_other
+    }
 }
 
 #[derive(Debug, Eq)]
