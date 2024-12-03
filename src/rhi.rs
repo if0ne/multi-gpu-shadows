@@ -204,6 +204,8 @@ pub struct Device {
     pub gfx_queue: CommandQueue,
     pub compute_queue: CommandQueue,
     pub copy_queue: CommandQueue,
+
+    pub is_cross_adapter_texture_supported: bool,
 }
 
 impl Device {
@@ -220,6 +222,11 @@ impl Device {
         let compute_queue = CommandQueue::new(&device, dx::CommandListType::Compute);
         let copy_queue = CommandQueue::new(&device, dx::CommandListType::Copy);
 
+        let mut feature = dx::features::OptionsFeature::default();
+        device
+            .check_feature_support(&mut feature)
+            .expect("Failed to fetch options feature");
+
         Self {
             id,
             adapter,
@@ -232,6 +239,8 @@ impl Device {
             gfx_queue,
             compute_queue,
             copy_queue,
+
+            is_cross_adapter_texture_supported: feature.cross_adapter_row_major_texture_supported(),
         }
     }
 
@@ -255,6 +264,33 @@ impl Device {
                 state,
                 clear_value.as_ref(),
             )
+            .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
+
+        let debug_name = CString::new(name.as_bytes()).expect("Failed to create resource name");
+        res.set_debug_object_name(&debug_name).unwrap();
+
+        DeviceResource {
+            device_id: self.id,
+            res,
+            name,
+            uuid,
+        }
+    }
+
+    pub fn create_placed_resource(
+        &self,
+        desc: &dx::ResourceDesc,
+        heap: &dx::Heap,
+        state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
+        name: impl AsRef<str>,
+    ) -> DeviceResource {
+        let name = name.as_ref().to_string();
+        let uuid = new_uuid();
+
+        let res = self
+            .gpu
+            .create_placed_resource(heap, 0, desc, state, clear_value.as_ref())
             .unwrap_or_else(|_| panic!("Failed to create resource {}", name));
 
         let debug_name = CString::new(name.as_bytes()).expect("Failed to create resource name");
@@ -647,7 +683,6 @@ impl DeviceTexture {
         let uuid = new_uuid();
         let desc = dx::ResourceDesc::texture_2d(width, height)
             .with_alignment(dx::HeapAlignment::ResourcePlacement)
-            .with_array_size(1)
             .with_format(format)
             .with_mip_levels(levels)
             .with_array_size(array as u16)
@@ -728,6 +763,222 @@ impl Texture {
             .iter()
             .find(|b| b.res.device_id.eq(&device_id))
     }
+}
+
+#[derive(Debug)]
+pub struct SharedTexture {
+    pub owner: Arc<Device>,
+    pub heap: dx::Heap,
+
+    pub state: SharedTextureState,
+    pub desc: dx::ResourceDesc,
+}
+
+impl SharedTexture {
+    pub fn new(
+        device: &Arc<Device>,
+        width: u32,
+        height: u32,
+        format: dx::Format,
+        flags: dx::ResourceFlags,
+        local_state: dx::ResourceStates,
+        shared_state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
+        name: impl AsRef<str>,
+    ) -> Self {
+        let desc = dx::ResourceDesc::texture_2d(width, height)
+            .with_alignment(dx::HeapAlignment::ResourcePlacement)
+            .with_array_size(1)
+            .with_format(format)
+            .with_mip_levels(1)
+            .with_array_size(1)
+            .with_layout(dx::TextureLayout::Unknown)
+            .with_flags(flags);
+
+        let (flags, state) = if device.is_cross_adapter_texture_supported {
+            (
+                dx::ResourceFlags::AllowCrossAdapter | desc.flags(),
+                local_state,
+            )
+        } else {
+            (dx::ResourceFlags::AllowCrossAdapter, shared_state)
+        };
+
+        let cross_desc = desc
+            .clone()
+            .with_flags(flags)
+            .with_layout(dx::TextureLayout::RowMajor);
+
+        let size = device
+            .gpu
+            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None);
+        let heap = device
+            .gpu
+            .create_heap(
+                &dx::HeapDesc::new(size, dx::HeapProperties::default())
+                    .with_flags(dx::HeapFlags::SharedCrossAdapter | dx::HeapFlags::Shared),
+            )
+            .expect("Failed to create shared heap");
+
+        let cross_res =
+            device.create_placed_resource(&cross_desc, &heap, state, clear_value, "Cross Resource");
+
+        let cross_res = DeviceTexture {
+            res: cross_res,
+            uuid: new_uuid(),
+            width,
+            height,
+            array: 1,
+            levels: 1,
+            format,
+            state: RefCell::new(state),
+        };
+
+        if device.is_cross_adapter_texture_supported {
+            Self {
+                owner: Arc::clone(device),
+                heap,
+                state: SharedTextureState::CrossAdapter { cross: cross_res },
+                desc,
+            }
+        } else {
+            let local_res = DeviceTexture::new(
+                device,
+                width,
+                height,
+                1,
+                format,
+                1,
+                desc.flags(),
+                local_state,
+                clear_value,
+                name,
+            );
+
+            Self {
+                owner: Arc::clone(device),
+                heap,
+                state: SharedTextureState::Binded {
+                    cross: cross_res,
+                    local: local_res,
+                },
+                desc,
+            }
+        }
+    }
+
+    pub fn local_resource(&self) -> &DeviceTexture {
+        match &self.state {
+            SharedTextureState::CrossAdapter { cross } => cross,
+            SharedTextureState::Binded { local, .. } => local,
+        }
+    }
+
+    pub fn cross_resource(&self) -> &DeviceTexture {
+        match &self.state {
+            SharedTextureState::CrossAdapter { cross } => cross,
+            SharedTextureState::Binded { cross, .. } => cross,
+        }
+    }
+
+    pub fn get_desc(&self) -> &dx::ResourceDesc {
+        &self.desc
+    }
+
+    pub fn owner(&self) -> &Device {
+        &self.owner
+    }
+
+    pub fn connect_texture(
+        &self,
+        other: &Arc<Device>,
+        local_state: dx::ResourceStates,
+        share_state: dx::ResourceStates,
+        clear_value: Option<dx::ClearValue>,
+        name: impl AsRef<str>,
+    ) -> Self {
+        let handle = self
+            .owner
+            .gpu
+            .create_shared_handle(&self.heap, None)
+            .expect("Failed to create shared heap");
+        let heap: dx::Heap = other
+            .gpu
+            .open_shared_handle(handle)
+            .expect("Failed to open shared heap");
+        handle.close().unwrap();
+
+        let (flags, state) = if other.is_cross_adapter_texture_supported {
+            (
+                dx::ResourceFlags::AllowCrossAdapter | self.desc.flags(),
+                local_state,
+            )
+        } else {
+            (dx::ResourceFlags::AllowCrossAdapter, share_state)
+        };
+
+        let cross_res = other.create_placed_resource(
+            &self.cross_resource().res.res.get_desc().with_flags(flags),
+            &heap,
+            state,
+            clear_value,
+            name,
+        );
+
+        let cross_res = DeviceTexture {
+            res: cross_res,
+            uuid: new_uuid(),
+            width: self.desc.width() as u32,
+            height: self.desc.height() as u32,
+            array: 1,
+            levels: 1,
+            format: self.desc.format(),
+            state: RefCell::new(state),
+        };
+
+        if other.is_cross_adapter_texture_supported {
+            Self {
+                owner: Arc::clone(&other),
+                heap,
+                state: SharedTextureState::CrossAdapter { cross: cross_res },
+                desc: self.desc.clone(),
+            }
+        } else {
+            let local_res = DeviceTexture::new(
+                &other,
+                cross_res.width,
+                cross_res.height,
+                1,
+                cross_res.format,
+                1,
+                self.desc.flags(),
+                local_state,
+                clear_value,
+                name,
+            );
+
+            Self {
+                owner: Arc::clone(other),
+                heap,
+                state: SharedTextureState::Binded {
+                    cross: cross_res,
+                    local: local_res,
+                },
+                desc: self.desc.clone(),
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SharedTextureState {
+    CrossAdapter {
+        cross: DeviceTexture,
+    },
+    Binded {
+        cross: DeviceTexture,
+        local: DeviceTexture,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
