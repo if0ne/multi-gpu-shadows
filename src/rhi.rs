@@ -1,7 +1,7 @@
 use std::{
     any::TypeId,
     cell::RefCell,
-    collections::VecDeque,
+    collections::{hash_map::Entry, VecDeque},
     ffi::CString,
     hash::Hash,
     num::NonZero,
@@ -11,7 +11,7 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
-use ahash::{HashSet, HashSetExt};
+use ahash::{HashMap, HashSet, HashSetExt};
 use fixedbitset::FixedBitSet;
 use oxidx::dx::{
     self, IAdapter3, IBlobExt, ICommandAllocator, ICommandQueue, IDebug, IDebug1, IDebugExt,
@@ -1618,6 +1618,65 @@ impl CompiledShader {
             .expect("Failed to compile a shader");
 
         Self { raw, desc }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ShaderHandle {
+    idx: usize,
+    gen: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct ShaderCache {
+    next_idx: usize,
+    gen: usize,
+    desc_to_handle: HashMap<ShaderDesc, ShaderHandle>,
+    handle_to_shader: HashMap<ShaderHandle, CompiledShader>,
+}
+
+impl ShaderCache {
+    pub fn get_shader_by_desc(&mut self, desc: ShaderDesc) -> ShaderHandle {
+        match self.desc_to_handle.entry(desc) {
+            Entry::Occupied(occupied_entry) => *occupied_entry.get(),
+            Entry::Vacant(vacant_entry) => {
+                let compiled_shader = CompiledShader::compile(vacant_entry.key().clone());
+
+                let idx = self.next_idx;
+                self.next_idx += 1;
+
+                let handle = ShaderHandle { idx, gen: self.gen };
+
+                self.handle_to_shader.insert(handle, compiled_shader);
+
+                handle
+            }
+        }
+    }
+
+    pub fn get_shader(&self, handle: &ShaderHandle) -> &CompiledShader {
+        self.handle_to_shader
+            .get(&handle)
+            .expect("Cache was cleared")
+    }
+
+    pub fn clear(&mut self) {
+        self.gen += 1;
+        self.next_idx = 0;
+        self.desc_to_handle.clear();
+        self.handle_to_shader.clear();
+    }
+
+    pub fn remove_by_desc(&mut self, desc: &ShaderDesc) {
+        if let Some(handle) = self.desc_to_handle.remove(desc) {
+            self.handle_to_shader.remove(&handle);
+        }
+    }
+
+    pub fn remove_by_handle(&mut self, handle: &ShaderHandle) {
+        if let Some(shader) = self.handle_to_shader.remove(handle) {
+            self.desc_to_handle.remove(&shader.desc);
+        }
     }
 }
 

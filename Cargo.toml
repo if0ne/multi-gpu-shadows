@@ -7,8 +7,7 @@ edition = "2021"
 ahash = "0.8.11"
 bitflags = "2.6.0"
 fixedbitset = "0.5.7"
-#oxidx = { git = "https://github.com/if0ne/oxidx" }
-oxidx = "0.3.2"
+oxidx = { git = "https://github.com/if0ne/oxidx" }
 gltf = { version = "1.4.1", features = ["guess_mime_type"] }
 glam = "0.29.2"
 image = "0.25.5"
