@@ -416,12 +416,12 @@ impl Drop for Descriptor {
 }
 
 #[derive(Debug)]
-pub struct Fence {
+pub struct LocalFence {
     pub fence: dx::Fence,
     pub value: AtomicU64,
 }
 
-impl Fence {
+impl LocalFence {
     pub fn new(device: &dx::Device) -> Self {
         let fence = device
             .create_fence(0, dx::FenceFlags::empty())
@@ -460,6 +460,94 @@ impl Fence {
     }
 }
 
+impl From<LocalFence> for Fence {
+    fn from(value: LocalFence) -> Self {
+        Fence::Local(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct SharedFence {
+    owner: Arc<Device>,
+    fence: dx::Fence,
+    value: Arc<AtomicU64>,
+}
+
+impl SharedFence {
+    pub(super) fn inner_new(owner: &Arc<Device>) -> Self {
+        let fence = owner
+            .gpu
+            .create_fence(
+                0,
+                dx::FenceFlags::Shared | dx::FenceFlags::SharedCrossAdapter,
+            )
+            .unwrap();
+
+        Self {
+            owner: Arc::clone(owner),
+            fence,
+            value: Default::default(),
+        }
+    }
+
+    pub fn get_completed_value(&self) -> u64 {
+        self.fence.get_completed_value()
+    }
+
+    pub fn set_event_on_completion(&self, value: u64, event: dx::Event) {
+        self.fence.set_event_on_completion(value, event).unwrap();
+    }
+
+    pub fn inc_value(&self) -> u64 {
+        self.value
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
+
+    pub fn get_current_value(&self) -> u64 {
+        self.value.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn wait(&self, value: u64) {
+        if self.get_completed_value() < value {
+            let event = dx::Event::create(false, false).expect("Failed to create event");
+            self.fence
+                .set_event_on_completion(value, event)
+                .expect("Failed to bind fence to event");
+            if event.wait(10_000_000) == 0x00000102 {
+                panic!("Device lost")
+            }
+        }
+    }
+}
+
+impl SharedFence {
+    pub fn connect(&self, device: &Arc<Device>) -> Self {
+        let handle = self
+            .owner
+            .gpu
+            .create_shared_handle(&self.fence, None)
+            .expect("Failed to create shared handle");
+        let fence = device
+            .gpu
+            .open_shared_handle(handle)
+            .expect("Failed to open shared handle");
+        handle.close().unwrap();
+
+        Self {
+            owner: Arc::clone(device),
+            fence,
+            value: Arc::clone(&self.value),
+        }
+    }
+}
+
+impl From<SharedFence> for Fence {
+    fn from(value: SharedFence) -> Self {
+        Fence::Shared(value)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CommandAllocatorEntry {
     pub(crate) raw: dx::CommandAllocator,
@@ -471,7 +559,7 @@ pub struct CommandQueue {
     pub queue: Mutex<dx::CommandQueue>,
     pub ty: dx::CommandListType,
 
-    pub fence: Fence,
+    pub fence: LocalFence,
 
     cmd_allocators: Mutex<VecDeque<CommandAllocatorEntry>>,
     cmd_lists: Mutex<Vec<dx::GraphicsCommandList>>,
@@ -488,7 +576,7 @@ impl CommandQueue {
             .create_command_queue(&dx::CommandQueueDesc::new(ty))
             .expect("Failed to create command queue");
 
-        let fence = Fence::new(device);
+        let fence = LocalFence::new(device);
 
         let frequency = 1000.0
             / queue
@@ -627,7 +715,7 @@ impl CommandQueue {
         }
     }
 
-    pub fn signal(&self, fence: &Fence) -> u64 {
+    pub fn signal(&self, fence: &LocalFence) -> u64 {
         let value = fence.inc_value();
         self.queue
             .lock()
