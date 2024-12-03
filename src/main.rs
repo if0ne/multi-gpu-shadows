@@ -301,8 +301,8 @@ impl Application {
                 signature: Some(rs),
                 formats: vec![dx::Format::Rgba8Unorm],
                 shaders: vec![ps],
-                depth_bias: 10000,
-                slope_bias: 1.0,
+                depth_bias: 0,
+                slope_bias: 0.0,
             },
             &shader_cache,
         );
@@ -341,8 +341,8 @@ impl Application {
                 signature: Some(rs),
                 formats: vec![],
                 shaders: vec![],
-                depth_bias: 0,
-                slope_bias: 0.0,
+                depth_bias: 10000,
+                slope_bias: 3.0,
             },
             &shader_cache,
         );

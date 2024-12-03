@@ -461,12 +461,6 @@ impl LocalFence {
     }
 }
 
-impl From<LocalFence> for Fence {
-    fn from(value: LocalFence) -> Self {
-        Fence::Local(value)
-    }
-}
-
 #[derive(Debug)]
 pub struct SharedFence {
     owner: Arc<Device>,
@@ -540,12 +534,6 @@ impl SharedFence {
             fence,
             value: Arc::clone(&self.value),
         }
-    }
-}
-
-impl From<SharedFence> for Fence {
-    fn from(value: SharedFence) -> Self {
-        Fence::Shared(value)
     }
 }
 
@@ -1011,7 +999,7 @@ impl SharedTexture {
             &heap,
             state,
             clear_value,
-            name,
+            &name,
         );
 
         let cross_res = DeviceTexture {
@@ -1508,6 +1496,7 @@ pub enum DepthOp {
     None,
     Less,
     LessEqual,
+    Greater,
 }
 
 impl DepthOp {
@@ -1516,6 +1505,7 @@ impl DepthOp {
             DepthOp::None => dx::ComparisonFunc::Never,
             DepthOp::Less => dx::ComparisonFunc::Less,
             DepthOp::LessEqual => dx::ComparisonFunc::LessEqual,
+            DepthOp::Greater => dx::ComparisonFunc::Greater,
         }
     }
 }
