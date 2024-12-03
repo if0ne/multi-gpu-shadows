@@ -1709,14 +1709,8 @@ pub struct RasterPipelineDesc {
     pub depth: Option<DepthDesc>,
     pub signature: Option<Rc<RootSignature>>,
     pub formats: Vec<dx::Format>,
-    pub vs: CompiledShader,
-    pub shaders: Vec<CompiledShader>,
-}
-
-impl RasterPipelineDesc {
-    pub(crate) fn get_shader(&self, ty: ShaderType) -> Option<&CompiledShader> {
-        self.shaders.iter().find(|s| s.desc.ty == ty)
-    }
+    pub vs: ShaderHandle,
+    pub shaders: Vec<ShaderHandle>,
 }
 
 impl Hash for RasterPipelineDesc {
@@ -1754,9 +1748,8 @@ pub struct RasterPipeline {
 }
 
 impl RasterPipeline {
-    pub fn new(device: &Device, desc: &RasterPipelineDesc) -> Self {
-        let vert = &desc.vs;
-        let pixel = desc.get_shader(ShaderType::Pixel);
+    pub fn new(device: &Device, desc: &RasterPipelineDesc, cache: &ShaderCache) -> Self {
+        let vert = cache.get_shader(&desc.vs);
 
         let input_element_desc = desc
             .input_elements
@@ -1800,17 +1793,20 @@ impl RasterPipeline {
             de
         };
 
-        let (de, rs) = if let Some(rs) = &desc.signature {
+        let (mut de, rs) = if let Some(rs) = &desc.signature {
             (de.with_root_signature(&rs.root), Some(Rc::clone(rs)))
         } else {
             (de, None)
         };
 
-        let de = if let Some(ps) = pixel {
-            de.with_ps(&ps.raw)
-        } else {
-            de
-        };
+        for handle in &desc.shaders {
+            let shader = cache.get_shader(handle);
+
+            match shader.desc.ty {
+                ShaderType::Pixel => de = de.with_ps(&shader.raw),
+                ShaderType::Vertex => unreachable!(),
+            }
+        }
 
         let pso = device
             .gpu
@@ -1844,11 +1840,15 @@ impl RasterPipelineCache {
         }
     }
 
-    pub fn get_pso_by_desc(&mut self, desc: RasterPipelineDesc) -> PipelineHandle {
+    pub fn get_pso_by_desc(
+        &mut self,
+        desc: RasterPipelineDesc,
+        shader_cache: &ShaderCache,
+    ) -> PipelineHandle {
         match self.desc_to_handle.entry(desc) {
             Entry::Occupied(occupied_entry) => *occupied_entry.get(),
             Entry::Vacant(vacant_entry) => {
-                let pso = RasterPipeline::new(&self.device, vacant_entry.key());
+                let pso = RasterPipeline::new(&self.device, vacant_entry.key(), shader_cache);
 
                 let idx = self.next_idx;
                 self.next_idx += 1;

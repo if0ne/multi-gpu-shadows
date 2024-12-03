@@ -17,7 +17,7 @@ use gbuffer::Gbuffer;
 use glam::{vec3, vec4, Mat4, Vec3, Vec4};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use oxidx::dx;
-use rhi::{DeviceManager, FRAMES_IN_FLIGHT};
+use rhi::FRAMES_IN_FLIGHT;
 use timer::GameTimer;
 use winit::{
     application::ApplicationHandler,
@@ -77,7 +77,9 @@ pub struct GpuAmbientLight {
 }
 
 pub struct Application {
-    pub device_manager: DeviceManager,
+    pub device_manager: rhi::DeviceManager,
+    pub shader_cache: rhi::ShaderCache,
+    pub gpu_raster_pipeline_cache: rhi::RasterPipelineCache,
 
     pub device: Arc<rhi::Device>,
 
@@ -96,7 +98,7 @@ pub struct Application {
     pub camera: Camera,
     pub camera_controller: FpsController,
 
-    pub pso: rhi::RasterPipeline,
+    pub pso: rhi::PipelineHandle,
 
     pub gpu_mesh: GpuMesh,
 
@@ -111,7 +113,7 @@ pub struct Application {
     pub normal_placeholder_view: rhi::DeviceTextureView,
 
     pub csm: CascadedShadowMaps,
-    pub csm_pso: rhi::RasterPipeline,
+    pub csm_pso: rhi::PipelineHandle,
 }
 
 impl Application {
@@ -246,14 +248,18 @@ impl Application {
             },
         ));
 
-        let vs = rhi::CompiledShader::compile(rhi::ShaderDesc {
+        let mut shader_cache = rhi::ShaderCache::default();
+        let mut gpu_raster_pipeline_cache = rhi::RasterPipelineCache::new(&device);
+
+        let vs = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
             ty: rhi::ShaderType::Vertex,
             path: PathBuf::from("assets/vert.hlsl"),
             entry_point: "Main".to_string(),
             debug: false,
             defines: vec![],
         });
-        let ps = rhi::CompiledShader::compile(rhi::ShaderDesc {
+
+        let ps = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
             ty: rhi::ShaderType::Pixel,
             path: PathBuf::from("assets/pixel.hlsl"),
             entry_point: "Main".to_string(),
@@ -261,9 +267,8 @@ impl Application {
             defines: vec![],
         });
 
-        let pso = rhi::RasterPipeline::new(
-            &device,
-            &rhi::RasterPipelineDesc {
+        let pso = gpu_raster_pipeline_cache.get_pso_by_desc(
+            rhi::RasterPipelineDesc {
                 input_elements: vec![
                     rhi::InputElementDesc {
                         semantic: dx::SemanticName::Position(0),
@@ -299,6 +304,7 @@ impl Application {
                 depth_bias: 10000,
                 slope_bias: 1.0,
             },
+            &shader_cache,
         );
 
         let rs = Rc::new(rhi::RootSignature::new(
@@ -310,16 +316,16 @@ impl Application {
             },
         ));
 
-        let csm_vs = rhi::CompiledShader::compile(rhi::ShaderDesc {
+        let csm_vs = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
             ty: rhi::ShaderType::Vertex,
             path: PathBuf::from("assets/csm_vert.hlsl"),
             entry_point: "Main".to_string(),
             debug: false,
             defines: vec![],
         });
-        let csm_pso = rhi::RasterPipeline::new(
-            &device,
-            &rhi::RasterPipelineDesc {
+
+        let csm_pso = gpu_raster_pipeline_cache.get_pso_by_desc(
+            rhi::RasterPipelineDesc {
                 input_elements: vec![rhi::InputElementDesc {
                     semantic: dx::SemanticName::Position(0),
                     format: dx::Format::Rgb32Float,
@@ -338,6 +344,7 @@ impl Application {
                 depth_bias: 0,
                 slope_bias: 0.0,
             },
+            &shader_cache,
         );
 
         let gbuffer = Gbuffer::new(&device, width, height);
@@ -385,6 +392,9 @@ impl Application {
 
         Self {
             device_manager,
+            shader_cache,
+            gpu_raster_pipeline_cache,
+
             device,
             camera_buffers,
             dir_light_buffer,
@@ -482,7 +492,7 @@ impl Application {
 
         // csm
         list.set_viewport(self.csm.size, self.csm.size);
-        list.set_graphics_pipeline(&self.csm_pso);
+        list.set_graphics_pipeline(self.gpu_raster_pipeline_cache.get_pso(&self.csm_pso));
         list.set_topology(rhi::GeomTopology::Triangles);
         list.set_device_texture_barrier(&self.csm.texture, dx::ResourceStates::DepthWrite, None);
 
@@ -517,7 +527,7 @@ impl Application {
 
         list.set_render_targets(&[view], Some(&self.gbuffer.depth_dsv));
         list.set_viewport(self.window_width, self.window_height);
-        list.set_graphics_pipeline(&self.pso);
+        list.set_graphics_pipeline(self.gpu_raster_pipeline_cache.get_pso(&self.pso));
         list.set_topology(rhi::GeomTopology::Triangles);
 
         list.set_graphics_cbv(
