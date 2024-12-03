@@ -1680,6 +1680,12 @@ impl ShaderCache {
     }
 }
 
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct PipelineHandle {
+    idx: usize,
+    gen: usize,
+}
+
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct DepthDesc {
     pub op: DepthOp,
@@ -1726,6 +1732,22 @@ impl Hash for RasterPipelineDesc {
     }
 }
 
+impl PartialEq for RasterPipelineDesc {
+    fn eq(&self, other: &Self) -> bool {
+        self.input_elements == other.input_elements
+            && self.line == other.line
+            && self.wireframe == other.wireframe
+            && self.depth == other.depth
+            && self.signature == other.signature
+            && self.formats == other.formats
+            && self.vs == other.vs
+            && self.shaders == other.shaders
+    }
+}
+
+impl Eq for RasterPipelineDesc {}
+
+#[derive(Debug)]
 pub struct RasterPipeline {
     pub pso: dx::PipelineState,
     pub root_signature: Option<Rc<RootSignature>>,
@@ -1798,6 +1820,68 @@ impl RasterPipeline {
         Self {
             pso,
             root_signature: rs,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RasterPipelineCache {
+    device: Arc<Device>,
+    next_idx: usize,
+    gen: usize,
+    desc_to_handle: HashMap<RasterPipelineDesc, PipelineHandle>,
+    handle_to_pso: HashMap<PipelineHandle, RasterPipeline>,
+}
+
+impl RasterPipelineCache {
+    pub fn new(device: &Arc<Device>) -> Self {
+        Self {
+            device: Arc::clone(&device),
+            next_idx: Default::default(),
+            gen: Default::default(),
+            desc_to_handle: Default::default(),
+            handle_to_pso: Default::default(),
+        }
+    }
+
+    pub fn get_pso_by_desc(&mut self, desc: RasterPipelineDesc) -> PipelineHandle {
+        match self.desc_to_handle.entry(desc) {
+            Entry::Occupied(occupied_entry) => *occupied_entry.get(),
+            Entry::Vacant(vacant_entry) => {
+                let pso = RasterPipeline::new(&self.device, vacant_entry.key());
+
+                let idx = self.next_idx;
+                self.next_idx += 1;
+
+                let handle = PipelineHandle { idx, gen: self.gen };
+
+                self.handle_to_pso.insert(handle, pso);
+
+                handle
+            }
+        }
+    }
+
+    pub fn get_pso(&self, handle: &PipelineHandle) -> &RasterPipeline {
+        self.handle_to_pso.get(&handle).expect("Cache was cleared")
+    }
+
+    pub fn clear(&mut self) {
+        self.gen += 1;
+        self.next_idx = 0;
+        self.desc_to_handle.clear();
+        self.handle_to_pso.clear();
+    }
+
+    pub fn remove_by_desc(&mut self, desc: &RasterPipelineDesc) {
+        if let Some(handle) = self.desc_to_handle.remove(desc) {
+            self.handle_to_pso.remove(&handle);
+        }
+    }
+
+    pub fn remove_by_handle(&mut self, handle: &PipelineHandle) {
+        if let Some(shader) = self.handle_to_pso.remove(handle) {
+            // TODO: Add removing from handle_to_pso
         }
     }
 }
