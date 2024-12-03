@@ -1604,11 +1604,13 @@ pub struct InputElementDesc {
     pub slot: u32,
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug)]
 pub struct RasterPipelineDesc {
     pub input_elements: Vec<InputElementDesc>,
     pub line: bool,
     pub wireframe: bool,
+    pub depth_bias: i32,
+    pub slope_bias: f32,
     pub depth: Option<DepthDesc>,
     pub signature: Option<Rc<RootSignature>>,
     pub formats: Vec<dx::Format>,
@@ -1619,6 +1621,19 @@ pub struct RasterPipelineDesc {
 impl RasterPipelineDesc {
     pub(crate) fn get_shader(&self, ty: ShaderType) -> Option<&CompiledShader> {
         self.shaders.iter().find(|s| s.desc.ty == ty)
+    }
+}
+
+impl Hash for RasterPipelineDesc {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.input_elements.hash(state);
+        self.line.hash(state);
+        self.wireframe.hash(state);
+        self.depth.hash(state);
+        self.signature.hash(state);
+        self.formats.hash(state);
+        self.vs.hash(state);
+        self.shaders.hash(state);
     }
 }
 
@@ -1655,7 +1670,9 @@ impl RasterPipeline {
                     } else {
                         dx::FillMode::Solid
                     })
-                    .with_cull_mode(dx::CullMode::Back),
+                    .with_cull_mode(dx::CullMode::Back)
+                    .with_depth_bias(desc.depth_bias)
+                    .with_slope_scaled_depth_bias(desc.slope_bias),
             )
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
