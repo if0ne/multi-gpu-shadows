@@ -2,7 +2,7 @@
 #include "Pbr.hlsl"
 
 cbuffer GlobalBuffer : register(b0) {
-    Global g_data;
+    Globals g_data;
 }
 
 cbuffer MaterialBuffer : register(b1) {

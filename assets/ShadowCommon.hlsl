@@ -1,7 +1,7 @@
 struct CsmData {
     matrix proj_view[4];
     float4 split_distances;
-}
+};
 
 float sample_csm(
     Texture2DArray csm_t, 
@@ -52,5 +52,5 @@ float sample_csm_with_pcf(
         percent_lit += csm_t.SampleCmpLevelZero(comp_shadow_s, tex_coord+ offsets[i], proj_coords.z).r;
     }
     
-    return percentLit / 9.0f;
+    return percent_lit / 9.0f;
 }

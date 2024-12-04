@@ -4,13 +4,13 @@
 #include "FullscreenVS.hlsl"
 
 cbuffer GlobalBuffer : register(b0) {
-    Global g_data;
+    Globals g_data;
 }
 
 cbuffer DirectionalLightBuffer : register(b1)
 {
     DirectionalLight dir_light;
-};
+}
 
 cbuffer AmbientLightBuffer : register(b2)
 {
@@ -32,7 +32,7 @@ float3 compute_dir_light(float4 diffuse, float3 normal, float3 to_eye, float4 ma
     mat.fresnel_r0 = material.x;
     mat.roughness = material.y;
 
-    return blinn_phong(diffuse, light_strength, lightVec, normal, to_eye);
+    return blinn_phong(diffuse, mat, light_strength, lightVec, normal, to_eye);
 }
 
 float4 Main(FullscreenVertex input) : SV_Target {
@@ -44,7 +44,7 @@ float4 Main(FullscreenVertex input) : SV_Target {
     float shadow_factor = shadow_mask_t.Load(int3(tex_coord, 0)).r;
 
     float depth = material.w;
-    float4 world_pos = screen_to_world(float4(texCoord, depth, 1.0f), g_data.screen_dim, g_data.inv_proj_view);
+    float4 world_pos = screen_to_world(float4(tex_coord, depth, 1.0f), g_data.screen_dim, g_data.inv_proj_view);
     
     float3 to_eye = normalize(g_data.eye_pos - world_pos.xyz);
     float4 ambient = ambient_light.color * diffuse;

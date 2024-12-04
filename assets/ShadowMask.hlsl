@@ -3,7 +3,7 @@
 #include "FullscreenVS.hlsl"
 
 cbuffer GlobalBuffer : register(b0) {
-    Global g_data;
+    Globals g_data;
 }
 
 cbuffer CsmBuffer : register(b1) {
@@ -17,7 +17,7 @@ SamplerComparisonState comp_shadow_s : register(s0);
 
 float1 Main(FullscreenVertex input) : SV_TARGET {
     int2 tex_coord = input.pos.xy;
-    float depth = depth_t.Load(int3(texCoord, 0)).r;
+    float depth = depth_t.Load(int3(tex_coord, 0)).r;
 
     float4 world_pos = screen_to_world(float4(tex_coord, depth, 1.0f), g_data.screen_dim, g_data.inv_proj_view);
 

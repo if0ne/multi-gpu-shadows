@@ -1,7 +1,10 @@
+#ifndef COMMON_HLSL
+#define COMMON_HLSL
+
 struct Globals {
     matrix view;
     matrix proj;
-    matrix prov_view;
+    matrix proj_view;
     matrix inv_view;
     matrix inv_proj;
     matrix inv_proj_view;
@@ -11,7 +14,7 @@ struct Globals {
 
     float2 screen_dim;
     float2 _pad1;
-}
+};
 
 float4 clip_to_world(float4 clip, matrix inv_proj_view) {
     float4 view = mul(inv_proj_view, clip);
@@ -26,7 +29,7 @@ float4 screen_to_world(float4 screen, float2 screen_dim, matrix inv_proj_view) {
 
     float4 clip = float4(float2(texCoord.x, 1.0f - texCoord.y) * 2.0f - 1.0f, screen.z, screen.w);
 
-    return clip_to_world(clip);
+    return clip_to_world(clip, inv_proj_view);
 }
 
 float4 pack_normal_to_texture(float3 normal) {
@@ -40,3 +43,5 @@ float3 unpack_normal_from_texture(float4 packed_normal) {
     float3 normal = packed_normal.xyz * 2.0 - 1.0;
     return normalize(normal);
 }
+
+#endif

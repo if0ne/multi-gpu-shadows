@@ -1,13 +1,16 @@
+#ifndef PBR_HLSL
+#define PBR_HLSL
+
 struct Material {
     float4 diffuse;
     float fresnel_r0;
     float roughness;
-}
+};
 
 struct MaterialEntry {
     float fresnel_r0;
     float roughness;
-}
+};
 
 float3 schlick_fresnel(float3 r0, float3 normal, float3 light_vec) {
     float cos = saturate(dot(normal, light_vec));
@@ -31,3 +34,5 @@ float3 blinn_phong(float4 diffuse_albedo, MaterialEntry material, float3 light_s
 
     return (diffuse_albedo.rgb + spec_albedo) * light_strength;
 }
+
+#endif
