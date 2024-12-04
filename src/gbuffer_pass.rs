@@ -53,7 +53,7 @@ impl GbufferPass {
             dx::ResourceStates::RenderTarget,
             Some(dx::ClearValue::color(
                 dx::Format::Rgba32Float,
-                [0.0, 0.0, 0.0, 1.0],
+                [0.301, 0.5607, 0.675, 1.0],
             )),
             "Diffuse Texture",
         );
@@ -87,7 +87,7 @@ impl GbufferPass {
                 dx::Format::Rgba32Float,
                 [0.0, 0.0, 0.0, 1.0],
             )),
-            "Diffuse Texture",
+            "Normal Texture",
         );
 
         let normal_rtv = rhi::DeviceTextureView::new(
@@ -119,7 +119,7 @@ impl GbufferPass {
                 dx::Format::Rgba32Float,
                 [0.0, 0.0, 0.0, 1.0],
             )),
-            "Diffuse Texture",
+            "Material Texture",
         );
 
         let material_rtv = rhi::DeviceTextureView::new(
@@ -151,7 +151,7 @@ impl GbufferPass {
                 dx::Format::Rgba32Float,
                 [0.0, 0.0, 0.0, 1.0],
             )),
-            "Diffuse Texture",
+            "Accum Texture",
         );
 
         let accum_rtv = rhi::DeviceTextureView::new(
@@ -205,14 +205,15 @@ impl GbufferPass {
                 entries: vec![
                     rhi::BindingEntry::Cbv { num: 1, slot: 0 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 1 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
                     rhi::BindingEntry::Srv { num: 1, slot: 3 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 4 },
                 ],
                 static_samplers: vec![rhi::StaticSampler {
                     slot: 0,
                     filter: dx::Filter::Linear,
                     address_mode: dx::AddressMode::Wrap,
                     comp_func: dx::ComparisonFunc::None,
+                    b_color: dx::BorderColor::OpaqueWhite,
                 }],
                 bindless: false,
             },
@@ -266,10 +267,15 @@ impl GbufferPass {
                 }),
                 wireframe: false,
                 signature: Some(rs),
-                formats: vec![dx::Format::Rgba8Unorm],
+                formats: vec![
+                    dx::Format::Rgba32Float,
+                    dx::Format::Rgba32Float,
+                    dx::Format::Rgba32Float,
+                ],
                 shaders: vec![ps],
                 depth_bias: 0,
                 slope_bias: 0.0,
+                cull_mode: rhi::CullMode::Back,
             },
             &shader_cache,
         );
@@ -363,10 +369,10 @@ impl GbufferPass {
                     &gpu_mesh.image_views[map]
                         .get_view(device.id)
                         .expect("Not found texture view"),
-                    3,
+                    2,
                 );
             } else {
-                list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 3);
+                list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 2);
             }
 
             if let Some(map) = gpu_mesh.materials[submesh.material_idx].normal_map {
@@ -374,10 +380,10 @@ impl GbufferPass {
                     &gpu_mesh.image_views[map]
                         .get_view(device.id)
                         .expect("Not found texture view"),
-                    4,
+                    3,
                 );
             } else {
-                list.set_graphics_srv(&placeholder.normal_placeholder_view, 4);
+                list.set_graphics_srv(&placeholder.normal_placeholder_view, 3);
             }
 
             list.draw_indexed(

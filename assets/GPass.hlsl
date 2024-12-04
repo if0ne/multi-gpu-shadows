@@ -9,8 +9,8 @@ cbuffer MaterialBuffer : register(b1) {
     Material material_data;
 }
 
-Texture2D diffuse_t : register(t3);
-Texture2D normal_t : register(t4);
+Texture2D diffuse_t : register(t2);
+Texture2D normal_t : register(t3);
 
 SamplerState linear_clamp_s : register(s0);
 
@@ -36,7 +36,7 @@ PixelInput VSMain(VertexInput input) {
     float4 world_pos = float4(input.pos, 1.0f);
     output.pos_w = world_pos.xyz;
     output.pos = mul(g_data.proj_view, world_pos);
-    output.normal = mul(g_data.inv_proj_view, float4(input.normal, 1.0)).xyz;
+    output.normal = input.normal;
     output.tangent = input.tangent.xyz;
     output.bitangent = normalize(cross(output.normal, output.tangent));
     output.uv = input.uv;

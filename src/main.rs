@@ -242,7 +242,7 @@ impl Application {
 
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
-            far: 1000.0,
+            far: 500.0,
             near: 0.1,
             fov: 90.0f32.to_radians(),
             aspect_ratio: width as f32 / height as f32,
@@ -357,6 +357,8 @@ impl Application {
 
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
 
+        self.device.gfx_queue.stash_cmd_buffer(list);
+
         self.csm.render(
             &self.device,
             &self.gpu_mesh,
@@ -394,6 +396,7 @@ impl Application {
         self.gamma_correction_pass
             .render(&self.device, &self.pso_cache, &self.gbuffer, &view);
 
+        let list = self.device.gfx_queue.get_command_buffer(&self.device);
         list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
 
         self.device.gfx_queue.push_cmd_buffer(list);

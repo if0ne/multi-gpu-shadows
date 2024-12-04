@@ -125,7 +125,8 @@ impl CascadedShadowMapsPass {
                 formats: vec![],
                 shaders: vec![],
                 depth_bias: 10000,
-                slope_bias: 3.0,
+                slope_bias: 5.0,
+                cull_mode: rhi::CullMode::Back,
             },
             &shader_cache,
         );
@@ -161,26 +162,27 @@ impl CascadedShadowMapsPass {
             let p = (i as f32 + 1.0) / cascade_count as f32;
             let log = min_z * ratio.powf(p);
             let uniform = min_z + range * p;
-            let d = self.lamda * (log - uniform) + uniform;
-            *distance = (d - near_clip) / clip_range;
+            *distance = self.lamda * (log - uniform) + uniform;
         }
 
-        let mut last_split_dist = 0.0;
+        let mut cur_near = camera.near;
+
         for i in 0..cascade_count {
-            let split_dist = self.distances[i];
+            let cur_far = self.distances[i];
 
             let mut corners = [
-                glam::vec3(-1.0, 1.0, 0.0),
-                glam::vec3(1.0, 1.0, 0.0),
-                glam::vec3(1.0, -1.0, 0.0),
                 glam::vec3(-1.0, -1.0, 0.0),
-                glam::vec3(-1.0, 1.0, 1.0),
-                glam::vec3(1.0, 1.0, 1.0),
-                glam::vec3(1.0, -1.0, 1.0),
                 glam::vec3(-1.0, -1.0, 1.0),
+                glam::vec3(-1.0, 1.0, 0.0),
+                glam::vec3(-1.0, 1.0, 1.0),
+                glam::vec3(1.0, -1.0, 0.0),
+                glam::vec3(1.0, -1.0, 1.0),
+                glam::vec3(1.0, 1.0, 0.0),
+                glam::vec3(1.0, 1.0, 1.0),
             ];
 
-            let frust_proj = camera.proj();
+            let frust_proj =
+                glam::Mat4::perspective_lh(camera.fov, camera.aspect_ratio, cur_near, cur_far);
             let cam_view = camera.view;
 
             let frust_proj_view = (frust_proj * cam_view).inverse();
@@ -192,42 +194,36 @@ impl CascadedShadowMapsPass {
                 *corner = temp.xyz();
             }
 
-            for i in 0..4 {
-                let dist = corners[i + 4] - corners[i];
-                corners[i + 4] = corners[i] + (dist * split_dist);
-                corners[i] = corners[i] + (dist * last_split_dist);
-            }
-
             let center = corners
                 .into_iter()
                 .fold(glam::Vec3::ZERO, |center, corner| center + corner)
                 / 8.0;
 
-            let radius = corners
-                .map(|c| (c - center).length())
-                .into_iter()
-                .reduce(f32::max)
-                .unwrap();
-            let radius = (radius * 16.0).ceil() / 16.0;
+            let light_view = glam::Mat4::look_at_lh(center, center + light_dir, glam::Vec3::Y);
 
-            let max_extents = vec3(radius, radius, radius);
-            let min_extents = -max_extents;
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut min_y = f32::MAX;
+            let mut max_y = f32::MIN;
+            let mut min_z = f32::MAX;
+            let mut max_z = f32::MIN;
 
-            let light_view =
-                glam::Mat4::look_at_lh(center - light_dir * -min_extents.z, center, glam::Vec3::Y);
-            let light_proj = glam::Mat4::orthographic_lh(
-                min_extents.x,
-                max_extents.x,
-                min_extents.y,
-                max_extents.y,
-                0.0,
-                max_extents.z - min_extents.z,
-            );
+            for corner in corners {
+                let temp = light_view * glam::vec4(corner.x, corner.y, corner.z, 1.0);
+
+                min_x = min_x.min(temp.x);
+                max_x = max_x.max(temp.x);
+                min_y = min_y.min(temp.y);
+                max_y = max_y.max(temp.y);
+                min_z = min_z.min(temp.z);
+                max_z = max_z.max(temp.z);
+            }
+
+            let light_proj = glam::Mat4::orthographic_lh(min_x, max_x, min_y, max_y, min_z, max_z);
 
             self.cascade_proj_views[i] = light_proj * light_view;
 
-            last_split_dist = self.distances[i];
-            self.distances[i] = near_clip + split_dist * clip_range;
+            cur_near = cur_far;
         }
 
         self.gpu_csm_buffer.write(

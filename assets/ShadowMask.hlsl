@@ -15,7 +15,7 @@ Texture2DArray csm_t : register(t3);
 
 SamplerComparisonState comp_shadow_s : register(s0);
 
-float1 Main(FullscreenVertex input) : SV_TARGET {
+float4 Main(FullscreenVertex input) : SV_TARGET {
     int2 tex_coord = input.pos.xy;
     float depth = depth_t.Load(int3(tex_coord, 0)).r;
 
@@ -34,5 +34,5 @@ float1 Main(FullscreenVertex input) : SV_TARGET {
 
     float shadow_factor = sample_csm(csm_t, comp_shadow_s, mul(csm_data.proj_view[cascade_idx], world_pos), cascade_idx);
 
-    return shadow_factor;
+    return float4(shadow_factor, 0.0, 0.0, 1.0);
 }

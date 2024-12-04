@@ -24,6 +24,7 @@ impl GammaCorrectionPass {
                     filter: dx::Filter::Linear,
                     address_mode: dx::AddressMode::Wrap,
                     comp_func: dx::ComparisonFunc::None,
+                    b_color: dx::BorderColor::OpaqueWhite,
                 }],
                 bindless: false,
             },
@@ -47,16 +48,28 @@ impl GammaCorrectionPass {
 
         let pso = pso_cache.get_pso_by_desc(
             rhi::RasterPipelineDesc {
-                input_elements: vec![],
+                input_elements: vec![
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::Position(0),
+                        format: dx::Format::Rgb32Float,
+                        slot: 0,
+                    },
+                    rhi::InputElementDesc {
+                        semantic: dx::SemanticName::TexCoord(0),
+                        format: dx::Format::Rg32Float,
+                        slot: 1,
+                    },
+                ],
                 vs: vs,
                 line: false,
                 depth: None,
                 wireframe: false,
                 signature: Some(rs),
-                formats: vec![],
+                formats: vec![dx::Format::Rgba8Unorm],
                 shaders: vec![ps],
                 depth_bias: 0,
                 slope_bias: 0.0,
+                cull_mode: rhi::CullMode::None,
             },
             &shader_cache,
         );

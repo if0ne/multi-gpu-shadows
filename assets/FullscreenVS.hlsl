@@ -1,5 +1,6 @@
 #ifndef FULLSCREEN_VS
 #define FULLSCREEN_VS
+
 struct FullscreenVertex {
     float4 pos : SV_POSITION;
     float2 uv : TexCoord;

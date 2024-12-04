@@ -1406,6 +1406,7 @@ pub struct StaticSampler {
     pub filter: dx::Filter,
     pub address_mode: dx::AddressMode,
     pub comp_func: dx::ComparisonFunc,
+    pub b_color: dx::BorderColor,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -1473,6 +1474,7 @@ impl RootSignature {
                     .with_address_w(ss.address_mode)
                     .with_comparison_func(ss.comp_func)
                     .with_shader_register(ss.slot)
+                    .with_border_color(ss.b_color)
                     .with_visibility(dx::ShaderVisibility::Pixel)
             })
             .collect::<Vec<_>>();
@@ -1689,6 +1691,23 @@ pub struct InputElementDesc {
     pub slot: u32,
 }
 
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub enum CullMode {
+    None,
+    Back,
+    Front,
+}
+
+impl CullMode {
+    pub(crate) fn as_dx(&self) -> dx::CullMode {
+        match self {
+            CullMode::None => dx::CullMode::None,
+            CullMode::Back => dx::CullMode::Back,
+            CullMode::Front => dx::CullMode::Front,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RasterPipelineDesc {
     pub input_elements: Vec<InputElementDesc>,
@@ -1701,6 +1720,7 @@ pub struct RasterPipelineDesc {
     pub formats: Vec<dx::Format>,
     pub vs: ShaderHandle,
     pub shaders: Vec<ShaderHandle>,
+    pub cull_mode: CullMode,
 }
 
 impl Hash for RasterPipelineDesc {
@@ -1764,7 +1784,7 @@ impl RasterPipeline {
                     } else {
                         dx::FillMode::Solid
                     })
-                    .with_cull_mode(dx::CullMode::Back)
+                    .with_cull_mode(desc.cull_mode.as_dx())
                     .with_depth_bias(desc.depth_bias)
                     .with_slope_scaled_depth_bias(desc.slope_bias),
             )
@@ -2462,7 +2482,9 @@ impl CommandBuffer {
             })
             .collect::<Vec<_>>();
 
-        self.list.resource_barrier(&barriers);
+        if barriers.len() > 0 {
+            self.list.resource_barrier(&barriers);
+        }
     }
 
     pub fn clear_render_target(&self, view: &DeviceTextureView, r: f32, g: f32, b: f32) {
