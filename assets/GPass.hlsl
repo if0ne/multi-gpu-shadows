@@ -48,7 +48,6 @@ struct PixelShaderOutput {
     float4 diffuse : SV_Target0;
     float4 normal : SV_Target1;
     float4 material : SV_Target2;
-    float4 accum : SV_Target3;
 };
 
 [earlydepthstencil]
@@ -66,7 +65,6 @@ PixelShaderOutput PSMain(PixelInput input) {
     output.diffuse = diffuse_t.Sample(linear_clamp_s, input.uv) * material_data.diffuse;
     output.normal = pack_normal_to_texture(normal);
     output.material = float4(material_data.fresnel_r0, material_data.roughness, 0.0, input.pos.z);
-    output.accum = float4(0.0, 0.0, 0.0, 1.0f);
     
     return output;
 }

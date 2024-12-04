@@ -1,23 +1,26 @@
 mod camera;
-mod csm;
-mod gbuffer;
+mod csm_pass;
+mod dir_light_pass;
+mod gamma_correction_pass;
+mod gbuffer_pass;
 mod gltf;
 mod rhi;
+mod shadow_mask_pass;
 mod timer;
 mod utils;
 
-use std::{
-    cell::RefCell, collections::HashMap, num::NonZero, path::PathBuf, rc::Rc, sync::Arc,
-    time::Duration,
-};
+use std::{cell::RefCell, collections::HashMap, num::NonZero, sync::Arc, time::Duration};
 
 use camera::{Camera, FpsController};
-use csm::CascadedShadowMaps;
-use gbuffer::Gbuffer;
-use glam::{vec3, vec4, Mat4, Vec3, Vec4};
+use csm_pass::CascadedShadowMapsPass;
+use dir_light_pass::DirectionalLightPass;
+use gamma_correction_pass::GammaCorrectionPass;
+use gbuffer_pass::GbufferPass;
+use glam::{vec2, vec3, Mat4, Vec2, Vec3};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
+use shadow_mask_pass::ShadowMaskPass;
 use timer::GameTimer;
 use winit::{
     application::ApplicationHandler,
@@ -41,7 +44,16 @@ pub struct WindowContext {
 pub struct GpuGlobals {
     pub view: Mat4,
     pub proj: Mat4,
+    pub proj_view: Mat4,
+    pub inv_view: Mat4,
+    pub inv_proj: Mat4,
+    pub inv_proj_view: Mat4,
+
     pub eye_pos: Vec3,
+    pub _pad0: f32,
+
+    pub screen_dim: Vec2,
+    pub _pad1: Vec2,
 }
 
 #[derive(Clone, Debug)]
@@ -60,34 +72,17 @@ pub struct GpuTransform {
     pub world: Mat4,
 }
 
-#[derive(Clone, Debug)]
-#[repr(C)]
-#[repr(align(256))]
-pub struct GpuDirectionalLight {
-    pub strength: Vec3,
-    pub _pad: f32,
-    pub direction: Vec3,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-#[repr(align(256))]
-pub struct GpuAmbientLight {
-    pub color: Vec4,
-}
-
 pub struct Application {
     pub device_manager: rhi::DeviceManager,
     pub shader_cache: rhi::ShaderCache,
-    pub gpu_raster_pipeline_cache: rhi::RasterPipelineCache,
 
+    pub pso_cache: rhi::RasterPipelineCache,
     pub device: Arc<rhi::Device>,
+    pub placeholder: TexturePlaceholders,
 
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub camera_buffers: rhi::Buffer,
-    pub dir_light_buffer: rhi::DeviceBuffer,
-    pub ambient_light_buffer: rhi::DeviceBuffer,
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
@@ -98,41 +93,29 @@ pub struct Application {
     pub camera: Camera,
     pub camera_controller: FpsController,
 
-    pub pso: rhi::PipelineHandle,
-
     pub gpu_mesh: GpuMesh,
 
     pub window_width: u32,
     pub window_height: u32,
 
-    pub gbuffer: Gbuffer,
+    pub gbuffer: GbufferPass,
+    pub csm: CascadedShadowMapsPass,
+    pub shadow_mask: ShadowMaskPass,
+    pub dir_light_pass: DirectionalLightPass,
+    pub gamma_correction_pass: GammaCorrectionPass,
+}
+
+pub struct TexturePlaceholders {
     pub diffuse_placeholder: rhi::DeviceTexture,
     pub diffuse_placeholder_view: rhi::DeviceTextureView,
 
     pub normal_placeholder: rhi::DeviceTexture,
     pub normal_placeholder_view: rhi::DeviceTextureView,
-
-    pub csm: CascadedShadowMaps,
-    pub csm_pso: rhi::PipelineHandle,
 }
 
-impl Application {
-    pub fn new(width: u32, height: u32) -> Self {
-        let mut device_manager = rhi::DeviceManager::new(true);
-        let device = device_manager
-            .get_high_perf_device()
-            .expect("Failed to fetch high perf gpu");
-
-        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
-
-        let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
-            mesh,
-            devices: &[&device],
-            normal_vb: device.id,
-            uv_vb: device.id,
-            tangent_vb: device.id,
-            materials: device.id,
-        });
+impl TexturePlaceholders {
+    pub fn new(device: &Arc<rhi::Device>) -> Self {
+        let cmd = device.gfx_queue.get_command_buffer(&device);
 
         let diffuse_placeholder = rhi::DeviceTexture::new(
             &device,
@@ -158,7 +141,6 @@ impl Application {
             "Staging Buffer",
             std::any::TypeId::of::<u8>(),
         );
-        let cmd = device.gfx_queue.get_command_buffer(&device);
 
         cmd.load_device_texture_from_memory(&diffuse_placeholder, &staging, &[255, 255, 255, 255]);
         cmd.set_device_texture_barrier(
@@ -201,6 +183,7 @@ impl Application {
 
         device.gfx_queue.push_cmd_buffer(cmd);
         device.gfx_queue.wait_on_cpu(device.gfx_queue.execute());
+
         let diffuse_placeholder_view = rhi::DeviceTextureView::new(
             &device,
             &diffuse_placeholder,
@@ -217,137 +200,45 @@ impl Application {
             None,
         );
 
-        let rs = Rc::new(rhi::RootSignature::new(
-            &device,
-            rhi::RootSignatureDesc {
-                entries: vec![
-                    rhi::BindingEntry::Srv { num: 1, slot: 0 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 1 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 3 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 4 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 5 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 6 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 7 },
-                ],
-                static_samplers: vec![
-                    rhi::StaticSampler {
-                        slot: 0,
-                        filter: dx::Filter::Linear,
-                        address_mode: dx::AddressMode::Wrap,
-                        comp_func: dx::ComparisonFunc::None,
-                    },
-                    rhi::StaticSampler {
-                        slot: 1,
-                        filter: dx::Filter::ComparisonLinear,
-                        address_mode: dx::AddressMode::Border,
-                        comp_func: dx::ComparisonFunc::LessEqual,
-                    },
-                ],
-                bindless: false,
-            },
-        ));
+        Self {
+            diffuse_placeholder,
+            diffuse_placeholder_view,
+            normal_placeholder,
+            normal_placeholder_view,
+        }
+    }
+}
+
+impl Application {
+    pub fn new(width: u32, height: u32) -> Self {
+        let mut device_manager = rhi::DeviceManager::new(true);
+        let device = device_manager
+            .get_high_perf_device()
+            .expect("Failed to fetch high perf gpu");
+
+        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
+
+        let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
+            mesh,
+            devices: &[&device],
+            normal_vb: device.id,
+            uv_vb: device.id,
+            tangent_vb: device.id,
+            materials: device.id,
+        });
 
         let mut shader_cache = rhi::ShaderCache::default();
-        let mut gpu_raster_pipeline_cache = rhi::RasterPipelineCache::new(&device);
+        let mut pso_cache = rhi::RasterPipelineCache::new(&device);
+        let placeholder = TexturePlaceholders::new(&device);
 
-        let vs = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
-            ty: rhi::ShaderType::Vertex,
-            path: PathBuf::from("assets/vert.hlsl"),
-            entry_point: "Main".to_string(),
-            debug: false,
-            defines: vec![],
-        });
-
-        let ps = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
-            ty: rhi::ShaderType::Pixel,
-            path: PathBuf::from("assets/pixel.hlsl"),
-            entry_point: "Main".to_string(),
-            debug: true,
-            defines: vec![],
-        });
-
-        let pso = gpu_raster_pipeline_cache.get_pso_by_desc(
-            rhi::RasterPipelineDesc {
-                input_elements: vec![
-                    rhi::InputElementDesc {
-                        semantic: dx::SemanticName::Position(0),
-                        format: dx::Format::Rgb32Float,
-                        slot: 0,
-                    },
-                    rhi::InputElementDesc {
-                        semantic: dx::SemanticName::Normal(0),
-                        format: dx::Format::Rgb32Float,
-                        slot: 1,
-                    },
-                    rhi::InputElementDesc {
-                        semantic: dx::SemanticName::TexCoord(0),
-                        format: dx::Format::Rg32Float,
-                        slot: 2,
-                    },
-                    rhi::InputElementDesc {
-                        semantic: dx::SemanticName::Tangent(0),
-                        format: dx::Format::Rgba32Float,
-                        slot: 3,
-                    },
-                ],
-                vs,
-                line: false,
-                depth: Some(rhi::DepthDesc {
-                    op: rhi::DepthOp::LessEqual,
-                    format: dx::Format::D24UnormS8Uint,
-                }),
-                wireframe: false,
-                signature: Some(rs),
-                formats: vec![dx::Format::Rgba8Unorm],
-                shaders: vec![ps],
-                depth_bias: 0,
-                slope_bias: 0.0,
-            },
-            &shader_cache,
-        );
-
-        let rs = Rc::new(rhi::RootSignature::new(
-            &device,
-            rhi::RootSignatureDesc {
-                entries: vec![rhi::BindingEntry::Cbv { num: 1, slot: 0 }],
-                static_samplers: vec![],
-                bindless: false,
-            },
-        ));
-
-        let csm_vs = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
-            ty: rhi::ShaderType::Vertex,
-            path: PathBuf::from("assets/csm_vert.hlsl"),
-            entry_point: "Main".to_string(),
-            debug: false,
-            defines: vec![],
-        });
-
-        let csm_pso = gpu_raster_pipeline_cache.get_pso_by_desc(
-            rhi::RasterPipelineDesc {
-                input_elements: vec![rhi::InputElementDesc {
-                    semantic: dx::SemanticName::Position(0),
-                    format: dx::Format::Rgb32Float,
-                    slot: 0,
-                }],
-                vs: csm_vs,
-                line: false,
-                depth: Some(rhi::DepthDesc {
-                    op: rhi::DepthOp::LessEqual,
-                    format: dx::Format::D32Float,
-                }),
-                wireframe: false,
-                signature: Some(rs),
-                formats: vec![],
-                shaders: vec![],
-                depth_bias: 10000,
-                slope_bias: 3.0,
-            },
-            &shader_cache,
-        );
-
-        let gbuffer = Gbuffer::new(&device, width, height);
+        let gbuffer = GbufferPass::new(width, height, &device, &mut shader_cache, &mut pso_cache);
+        let csm =
+            CascadedShadowMapsPass::new(&device, 2 * 1024, 0.5, &mut shader_cache, &mut pso_cache);
+        let shadow_mask =
+            ShadowMaskPass::new(&device, width, height, &mut shader_cache, &mut pso_cache);
+        let dir_light_pass = DirectionalLightPass::new(&device, &mut shader_cache, &mut pso_cache);
+        let gamma_correction_pass =
+            GammaCorrectionPass::new(&device, &mut shader_cache, &mut pso_cache);
 
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
@@ -359,46 +250,17 @@ impl Application {
 
         let controller = FpsController::new(0.003, 100.0);
 
-        let csm = CascadedShadowMaps::new(&device, 2 * 1024, 0.5);
-
         let camera_buffers =
             rhi::Buffer::constant::<GpuGlobals>(FRAMES_IN_FLIGHT, "Camera Buffers", &[&device]);
-
-        let mut dir_light_buffer = rhi::DeviceBuffer::constant::<GpuDirectionalLight>(
-            &device,
-            1,
-            "Directional Light Buffers",
-        );
-
-        dir_light_buffer.write(
-            0,
-            GpuDirectionalLight {
-                strength: vec3(1.0, 0.81, 0.16),
-                direction: vec3(-1.0, -1.0, -1.0),
-
-                _pad: 0.0,
-            },
-        );
-
-        let mut ambient_light_buffer =
-            rhi::DeviceBuffer::constant::<GpuAmbientLight>(&device, 1, "Ambient Light Buffers");
-
-        ambient_light_buffer.write(
-            0,
-            GpuAmbientLight {
-                color: vec4(0.3, 0.3, 0.63, 1.0),
-            },
-        );
 
         Self {
             device_manager,
             shader_cache,
-            gpu_raster_pipeline_cache,
+            pso_cache,
+            placeholder,
 
             device,
             camera_buffers,
-            dir_light_buffer,
-            ambient_light_buffer,
             wnd_ctx: None,
             wnd_title: "Multi-GPU Shadows Sample".to_string(),
             timer: GameTimer::default(),
@@ -406,19 +268,16 @@ impl Application {
             curr_frame: 0,
             camera,
             camera_controller: controller,
-            pso,
             window_width: width,
             window_height: height,
             keys: HashMap::new(),
-            gbuffer,
             gpu_mesh,
-            diffuse_placeholder,
-            diffuse_placeholder_view,
-            normal_placeholder,
-            normal_placeholder_view,
 
             csm,
-            csm_pso,
+            gbuffer,
+            shadow_mask,
+            dir_light_pass,
+            gamma_correction_pass,
         }
     }
 
@@ -471,6 +330,14 @@ impl Application {
                 view: self.camera.view,
                 proj: self.camera.proj(),
                 eye_pos: self.camera_controller.position,
+                proj_view: self.camera.proj() * self.camera.view,
+                inv_view: self.camera.view.inverse(),
+                inv_proj: self.camera.proj().inverse(),
+                inv_proj_view: (self.camera.proj() * self.camera.view).inverse(),
+                screen_dim: vec2(self.window_width as f32, self.window_height as f32),
+
+                _pad0: 0.0,
+                _pad1: Vec2::ZERO,
             },
         );
 
@@ -490,108 +357,43 @@ impl Application {
 
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
 
-        // csm
-        list.set_viewport(self.csm.size, self.csm.size);
-        list.set_graphics_pipeline(self.gpu_raster_pipeline_cache.get_pso(&self.csm_pso));
-        list.set_topology(rhi::GeomTopology::Triangles);
-        list.set_device_texture_barrier(&self.csm.texture, dx::ResourceStates::DepthWrite, None);
-
-        for i in 0..4 {
-            list.clear_depth_target(&self.csm.dsvs[i]);
-            list.set_render_targets(&[], Some(&self.csm.dsvs[i]));
-            list.set_graphics_cbv(
-                &self.csm.gpu_csm_proj_view_buffer.cbv[i * FRAMES_IN_FLIGHT + self.curr_frame],
-                0,
-            );
-
-            list.set_vertex_buffers(&[&self.gpu_mesh.pos_vb]);
-            list.set_index_buffer(&self.gpu_mesh.ib);
-
-            for submesh in &self.gpu_mesh.sub_meshes {
-                list.draw(
-                    submesh.index_count,
-                    submesh.start_index_location,
-                    submesh.base_vertex_location as i32,
-                );
-            }
-        }
-        list.set_device_texture_barrier(
-            &self.csm.texture,
-            dx::ResourceStates::PixelShaderResource,
-            None,
+        self.csm.render(
+            &self.device,
+            &self.gpu_mesh,
+            &self.pso_cache,
+            self.curr_frame,
         );
 
-        // forward
-        list.clear_render_target(view, 0.301, 0.5607, 0.675);
-        list.clear_depth_target(&self.gbuffer.depth_dsv);
-
-        list.set_render_targets(&[view], Some(&self.gbuffer.depth_dsv));
-        list.set_viewport(self.window_width, self.window_height);
-        list.set_graphics_pipeline(self.gpu_raster_pipeline_cache.get_pso(&self.pso));
-        list.set_topology(rhi::GeomTopology::Triangles);
-
-        list.set_graphics_cbv(
-            &self
-                .camera_buffers
-                .get_buffer(self.device.id)
-                .expect("Not found device")
-                .cbv[self.curr_frame],
-            3,
+        self.gbuffer.render(
+            &self.device,
+            &self.gpu_mesh,
+            &self.placeholder,
+            &self.pso_cache,
+            &self.camera_buffers,
+            self.curr_frame,
         );
 
-        list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 5);
-        list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 6);
-        list.set_graphics_cbv(&self.csm.gpu_csm_buffer.cbv[self.curr_frame], 7);
+        self.shadow_mask.render(
+            &self.device,
+            &self.camera_buffers,
+            &self.pso_cache,
+            self.curr_frame,
+            (&self.gbuffer.depth, &self.gbuffer.depth_srv),
+            &self.csm,
+        );
 
-        list.set_graphics_srv(&self.csm.srv, 2);
+        self.dir_light_pass.render(
+            &self.device,
+            &self.camera_buffers,
+            &self.pso_cache,
+            self.curr_frame,
+            &self.gbuffer,
+            &self.shadow_mask,
+        );
 
-        list.set_vertex_buffers(&[
-            &self.gpu_mesh.pos_vb,
-            &self.gpu_mesh.normal_vb,
-            &self.gpu_mesh.uv_vb,
-            &self.gpu_mesh.tangent_vb,
-        ]);
-        list.set_index_buffer(&self.gpu_mesh.ib);
+        self.gamma_correction_pass
+            .render(&self.device, &self.pso_cache, &self.gbuffer, &view);
 
-        for submesh in &self.gpu_mesh.sub_meshes {
-            list.set_graphics_cbv(
-                &self
-                    .gpu_mesh
-                    .gpu_materials
-                    .get_buffer(self.device.id)
-                    .expect("Not found device")
-                    .cbv[submesh.material_idx],
-                4,
-            );
-
-            if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].diffuse_map {
-                list.set_graphics_srv(
-                    &self.gpu_mesh.image_views[map]
-                        .get_view(self.device.id)
-                        .expect("Not found texture view"),
-                    0,
-                );
-            } else {
-                list.set_graphics_srv(&self.diffuse_placeholder_view, 0);
-            }
-
-            if let Some(map) = self.gpu_mesh.materials[submesh.material_idx].normal_map {
-                list.set_graphics_srv(
-                    &self.gpu_mesh.image_views[map]
-                        .get_view(self.device.id)
-                        .expect("Not found texture view"),
-                    1,
-                );
-            } else {
-                list.set_graphics_srv(&self.normal_placeholder_view, 1);
-            }
-
-            list.draw(
-                submesh.index_count,
-                submesh.start_index_location,
-                submesh.base_vertex_location as i32,
-            );
-        }
         list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
 
         self.device.gfx_queue.push_cmd_buffer(list);
@@ -733,7 +535,21 @@ impl ApplicationHandler for Application {
                     );
                     self.curr_frame = 0;
 
-                    self.gbuffer = Gbuffer::new(&self.device, size.width, size.height);
+                    self.gbuffer = GbufferPass::new(
+                        size.width,
+                        size.height,
+                        &self.device,
+                        &mut self.shader_cache,
+                        &mut self.pso_cache,
+                    );
+
+                    self.shadow_mask = ShadowMaskPass::new(
+                        &self.device,
+                        size.width,
+                        size.height,
+                        &mut self.shader_cache,
+                        &mut self.pso_cache,
+                    );
                 }
             }
             WindowEvent::RedrawRequested => {

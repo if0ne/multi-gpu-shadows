@@ -2395,6 +2395,21 @@ impl CommandBuffer {
         self.set_device_texture_barrier(texture, state, mip);
     }
 
+    pub fn set_texture_barriers(&self, texture: &[(&Texture, dx::ResourceStates)]) {
+        let textures = texture
+            .iter()
+            .filter_map(|(t, s)| {
+                if let Some(t) = t.get_texture(self.device_id) {
+                    Some((t, *s))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.set_device_texture_barriers(&textures);
+    }
+
     pub fn set_device_texture_barrier(
         &self,
         texture: &DeviceTexture,
@@ -2417,6 +2432,32 @@ impl CommandBuffer {
 
         self.list.resource_barrier(&[barrier]);
         *old_state = state;
+    }
+
+    pub fn set_device_texture_barriers(&self, texture: &[(&DeviceTexture, dx::ResourceStates)]) {
+        let barriers = texture
+            .iter()
+            .filter_map(|(t, s)| {
+                let mut old_state = t.state.borrow_mut();
+
+                if *old_state == *s {
+                    return None;
+                }
+
+                let barrier = if *old_state == dx::ResourceStates::UnorderedAccess
+                    && *s == dx::ResourceStates::UnorderedAccess
+                {
+                    dx::ResourceBarrier::uav(&t.res.res)
+                } else {
+                    dx::ResourceBarrier::transition(&t.res.res, *old_state, *s, None)
+                };
+                *old_state = *s;
+
+                Some(barrier)
+            })
+            .collect::<Vec<_>>();
+
+        self.list.resource_barrier(&barriers);
     }
 
     pub fn clear_render_target(&self, view: &DeviceTextureView, r: f32, g: f32, b: f32) {
@@ -2484,7 +2525,11 @@ impl CommandBuffer {
         self.list.ia_set_primitive_topology(topo.as_dx());
     }
 
-    pub fn draw(&self, count: u32, start_index: u32, base_vertex: i32) {
+    pub fn draw(&self, count: u32) {
+        self.list.draw_instanced(count, 1, 0, 0);
+    }
+
+    pub fn draw_indexed(&self, count: u32, start_index: u32, base_vertex: i32) {
         self.list
             .draw_indexed_instanced(count, 1, start_index, base_vertex, 0);
     }
