@@ -1,6 +1,6 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
-use glam::{vec3, vec4, Vec4, Vec4Swizzles};
+use glam::{vec4, Vec4, Vec4Swizzles};
 use oxidx::dx;
 
 use crate::{
