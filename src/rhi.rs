@@ -2351,6 +2351,11 @@ impl CommandBuffer {
         ]);
     }
 
+    pub fn set_mark(&self, mark: impl AsRef<str>) {
+        let mark = CString::new(mark.as_ref().as_bytes()).expect("Failed to create mark");
+        self.list.set_marker(0u64, &mark);
+    }
+
     pub fn set_render_targets(
         &self,
         views: &[&DeviceTextureView],

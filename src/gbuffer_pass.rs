@@ -308,6 +308,7 @@ impl GbufferPass {
         frame_idx: usize,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
+        list.set_mark("G Pass");
 
         list.set_device_texture_barriers(&[
             (&self.diffuse, dx::ResourceStates::RenderTarget),

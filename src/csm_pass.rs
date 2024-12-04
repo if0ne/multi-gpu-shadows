@@ -262,6 +262,7 @@ impl CascadedShadowMapsPass {
         frame_idx: usize,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
+        list.set_mark("CSM Pass");
 
         list.set_viewport(self.size, self.size);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));

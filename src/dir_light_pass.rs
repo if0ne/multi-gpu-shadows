@@ -126,6 +126,7 @@ impl DirectionalLightPass {
         shadow_mask: &ShadowMaskPass,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
+        list.set_mark("Direction Light Pass");
 
         list.set_viewport(gbuffer.width, gbuffer.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
