@@ -264,6 +264,7 @@ impl GbufferPass {
                 depth: Some(rhi::DepthDesc {
                     op: rhi::DepthOp::LessEqual,
                     format: dx::Format::D24UnormS8Uint,
+                    read_only: false,
                 }),
                 wireframe: false,
                 signature: Some(rs),

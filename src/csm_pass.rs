@@ -119,6 +119,7 @@ impl CascadedShadowMapsPass {
                 depth: Some(rhi::DepthDesc {
                     op: rhi::DepthOp::LessEqual,
                     format: dx::Format::D32Float,
+                    read_only: false,
                 }),
                 wireframe: false,
                 signature: Some(rs),

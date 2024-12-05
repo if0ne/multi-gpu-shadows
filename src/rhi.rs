@@ -1682,6 +1682,7 @@ pub struct PipelineHandle {
 pub struct DepthDesc {
     pub op: DepthOp,
     pub format: dx::Format,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1796,7 +1797,13 @@ impl RasterPipeline {
 
         let de = if let Some(depth) = &desc.depth {
             de.with_depth_stencil(
-                dx::DepthStencilDesc::default().enable_depth(depth.op.as_dx()),
+                dx::DepthStencilDesc::default()
+                .enable_depth(depth.op.as_dx())
+                .with_depth_write_mask(if depth.read_only {
+                    dx::DepthWriteMask::empty()
+                } else {
+                    dx::DepthWriteMask::All
+                }),
                 depth.format,
             )
         } else {
