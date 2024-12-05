@@ -167,14 +167,17 @@ impl DeviceManager {
         Some(device)
     }
 
-    pub fn get_warp(&mut self) -> Device {
+    pub fn get_warp(&mut self) -> Arc<Device> {
         let adapter = self.gpu_warp.take().expect("Failed to fetch warp");
         let id = self
             .device_masks
             .pop_back()
             .expect("Failed to get device id");
 
-        Device::new(adapter, id)
+        let device = Arc::new(Device::new(adapter, id));
+        self.devices.push(Arc::clone(&device));
+
+        device
     }
 
     pub fn get_devices<'a>(
@@ -469,7 +472,7 @@ pub struct SharedFence {
 }
 
 impl SharedFence {
-    pub(super) fn inner_new(owner: &Arc<Device>) -> Self {
+    pub(super) fn new(owner: &Arc<Device>) -> Self {
         let fence = owner
             .gpu
             .create_fence(
@@ -599,6 +602,15 @@ impl CommandQueue {
         }
     }
 
+    pub fn set_mark(&self, mark: impl AsRef<str>) {
+        let mark = CString::new(mark.as_ref().as_bytes()).expect("Failed to create mark");
+        self.queue.lock().begin_event(0u64, &mark);
+    }
+
+    pub fn end_mark(&self) {
+        self.queue.lock().end_event();
+    }
+
     pub fn wait_on_gpu(&self, value: u64) {
         self.queue
             .lock()
@@ -662,7 +674,7 @@ impl CommandQueue {
 
         let allocator = if let Some(allocator) =
             self.cmd_allocators.lock().pop_front().and_then(|a| {
-                if self.is_fence_complete(a.sync_point) {
+                if self.is_complete(a.sync_point) {
                     Some(a)
                 } else {
                     None
@@ -714,12 +726,26 @@ impl CommandQueue {
         value
     }
 
-    fn signal_queue(&self) -> u64 {
-        self.signal(&self.fence)
+    pub fn signal_shared(&self, fence: &SharedFence) -> u64 {
+        let value = fence.inc_value();
+        self.queue
+            .lock()
+            .signal(&fence.fence, value)
+            .expect("Failed to signal");
+
+        value
     }
 
-    fn is_fence_complete(&self, value: u64) -> bool {
+    pub fn is_complete(&self, value: u64) -> bool {
         self.fence.get_completed_value() >= value
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.fence.get_completed_value() >= self.fence.get_current_value()
+    }
+
+    fn signal_queue(&self) -> u64 {
+        self.signal(&self.fence)
     }
 }
 

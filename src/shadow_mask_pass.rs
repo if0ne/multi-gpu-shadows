@@ -137,7 +137,6 @@ impl ShadowMaskPass {
         csm: &CascadedShadowMapsPass,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
-        list.set_mark("Shadow Mask Pass");
 
         list.set_viewport(self.width, self.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));

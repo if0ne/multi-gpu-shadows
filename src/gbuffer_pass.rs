@@ -304,12 +304,11 @@ impl GbufferPass {
         gpu_mesh: &GpuMesh,
         placeholder: &TexturePlaceholders,
         pso_cache: &rhi::RasterPipelineCache,
-        camera_buffer: &rhi::Buffer,
+        camera_buffer: &rhi::DeviceBuffer,
         frame_idx: usize,
         depth: &ZPass,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
-        list.set_mark("G Pass");
 
         list.set_device_texture_barriers(&[
             (&self.diffuse, dx::ResourceStates::RenderTarget),
@@ -332,13 +331,7 @@ impl GbufferPass {
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
         list.set_topology(rhi::GeomTopology::Triangles);
 
-        list.set_graphics_cbv(
-            &camera_buffer
-                .get_buffer(device.id)
-                .expect("Not found device")
-                .cbv[frame_idx],
-            0,
-        );
+        list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
         list.set_vertex_buffers(&[
             &gpu_mesh.pos_vb,

@@ -3,7 +3,7 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 use glam::{vec3, vec4, Vec3, Vec4};
 use oxidx::dx;
 
-use crate::{gbuffer_pass::GbufferPass, rhi, shadow_mask_pass::ShadowMaskPass};
+use crate::{gbuffer_pass::GbufferPass, rhi};
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -131,14 +131,13 @@ impl DirectionalLightPass {
     pub fn render(
         &self,
         device: &Arc<rhi::Device>,
-        camera_buffer: &rhi::Buffer,
+        camera_buffer: &rhi::DeviceBuffer,
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
         gbuffer: &GbufferPass,
-        shadow_mask: &ShadowMaskPass,
+        shadow_mask: (&rhi::DeviceTexture, &rhi::DeviceTextureView),
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
-        list.set_mark("Direction Light Pass");
 
         list.set_viewport(gbuffer.width, gbuffer.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
@@ -147,21 +146,12 @@ impl DirectionalLightPass {
             (&gbuffer.diffuse, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.normal, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.material, dx::ResourceStates::PixelShaderResource),
-            (
-                &shadow_mask.texture,
-                dx::ResourceStates::PixelShaderResource,
-            ),
+            (&shadow_mask.0, dx::ResourceStates::PixelShaderResource),
         ]);
 
         list.clear_render_target(&gbuffer.accum_rtv, 0.0, 0.0, 0.0);
         list.set_render_targets(&[&gbuffer.accum_rtv], None);
-        list.set_graphics_cbv(
-            &camera_buffer
-                .get_buffer(list.device_id)
-                .expect("Failed to get buffer")
-                .cbv[frame_idx],
-            0,
-        );
+        list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
         list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 1);
         list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 2);
@@ -169,7 +159,7 @@ impl DirectionalLightPass {
         list.set_graphics_srv(&gbuffer.diffuse_srv, 3);
         list.set_graphics_srv(&gbuffer.normal_srv, 4);
         list.set_graphics_srv(&gbuffer.material_srv, 5);
-        list.set_graphics_srv(&shadow_mask.texture_srv, 6);
+        list.set_graphics_srv(&shadow_mask.1, 6);
         list.draw(3);
 
         device.gfx_queue.stash_cmd_buffer(list);

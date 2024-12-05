@@ -106,13 +106,12 @@ impl ZPass {
     pub fn render(
         &self,
         device: &Arc<rhi::Device>,
-        camera_buffer: &rhi::Buffer,
+        camera_buffer: &rhi::DeviceBuffer,
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
         gpu_mesh: &GpuMesh,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
-        list.set_mark("Z pre-pass");
 
         list.set_viewport(self.width, self.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
@@ -121,13 +120,7 @@ impl ZPass {
 
         list.clear_depth_target(&self.depth_dsv);
         list.set_render_targets(&[], Some(&self.depth_srv));
-        list.set_graphics_cbv(
-            &camera_buffer
-                .get_buffer(list.device_id)
-                .expect("Failed to get buffer")
-                .cbv[frame_idx],
-            0,
-        );
+        list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
         list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
         list.set_index_buffer(&gpu_mesh.ib);

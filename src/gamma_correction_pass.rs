@@ -85,7 +85,6 @@ impl GammaCorrectionPass {
         swapchain_view: &rhi::DeviceTextureView,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
-        list.set_mark("Gamma Correction Pass");
 
         list.set_viewport(gbuffer.width, gbuffer.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
