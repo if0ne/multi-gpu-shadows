@@ -119,7 +119,7 @@ impl ZPass {
         list.set_device_texture_barriers(&[(&self.depth, dx::ResourceStates::DepthWrite)]);
 
         list.clear_depth_target(&self.depth_dsv);
-        list.set_render_targets(&[], Some(&self.depth_srv));
+        list.set_render_targets(&[], Some(&self.depth_dsv));
         list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
         list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);

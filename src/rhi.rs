@@ -914,7 +914,8 @@ impl SharedTexture {
 
         let size = device
             .gpu
-            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None) * 2;
+            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None)
+            * 2;
         let heap = device
             .gpu
             .create_heap(

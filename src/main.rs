@@ -30,6 +30,11 @@ use m_shadow_mask_pass::MgpuShadowMaskPass;
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use timer::GameTimer;
+use tracing::info;
+use tracing_subscriber::{
+    fmt::{self, writer::MakeWriterExt},
+    layer::SubscriberExt,
+};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -415,6 +420,8 @@ impl Application {
             return;
         };
 
+        info!("Beginning rendering");
+
         let working_texture = self
             .mgpu_shadow_mask
             .working_texture
@@ -423,6 +430,7 @@ impl Application {
         if self.mgpu_shadow_mask.sender_fence.get_completed_value()
             >= self.mgpu_shadow_mask.write_values[working_texture]
         {
+            info!("Recording to secondary gpu");
             self.s_csm
                 .update(&self.camera, vec3(-1.0, -1.0, -1.0), self.curr_frame);
 
@@ -451,6 +459,7 @@ impl Application {
             list.begin(&self.secondary_gpu);
             self.secondary_gpu.gfx_queue.stash_cmd_buffer(list);
 
+            info!("Zpass");
             self.s_zpass.render(
                 &self.secondary_gpu,
                 &self.mgpu_shadow_mask.camera_buffers,
@@ -459,6 +468,7 @@ impl Application {
                 &self.gpu_mesh,
             );
 
+            info!("Csm");
             self.s_csm.render(
                 &self.secondary_gpu,
                 &self.gpu_mesh,
@@ -466,8 +476,9 @@ impl Application {
                 self.curr_frame,
             );
 
+            info!("ShadowMask");
             self.mgpu_shadow_mask.render(
-                &self.primary_gpu,
+                &self.secondary_gpu,
                 &self.secondary_pso_cache,
                 &self.s_zpass,
                 &self.s_csm,
@@ -477,6 +488,8 @@ impl Application {
                 .secondary_gpu
                 .gfx_queue
                 .get_command_buffer(&self.secondary_gpu);
+
+            info!("Try copy");
 
             match &self.mgpu_shadow_mask.sender[working_texture].state {
                 rhi::SharedTextureState::CrossAdapter { .. } => {
@@ -490,6 +503,8 @@ impl Application {
                     list.copy_texture_to_texture(cross, local);
                 }
             };
+
+            info!("Copied");
 
             self.secondary_gpu.gfx_queue.push_cmd_buffer(list);
             self.secondary_gpu.gfx_queue.execute();
@@ -505,6 +520,8 @@ impl Application {
         if self.mgpu_shadow_mask.recv_fence.get_completed_value()
             >= self.mgpu_shadow_mask.write_values[copy_texture]
         {
+            info!("Copy shadow mask to primary gpu");
+
             let list = self
                 .primary_gpu
                 .copy_queue
@@ -540,6 +557,7 @@ impl Application {
 
         self.primary_gpu.gfx_queue.stash_cmd_buffer(list);
 
+        info!("Primary ZPass");
         self.primary_gpu.gfx_queue.set_mark("Primary Z Prepass");
         self.p_zpass.render(
             &self.primary_gpu,
@@ -550,6 +568,7 @@ impl Application {
         );
         self.primary_gpu.gfx_queue.end_mark();
 
+        info!("Primary G Pass");
         self.primary_gpu.gfx_queue.set_mark("G Pass");
         self.p_gbuffer.render(
             &self.primary_gpu,
@@ -562,6 +581,7 @@ impl Application {
         );
         self.primary_gpu.gfx_queue.end_mark();
 
+        info!("Primary Direction Light Pass");
         self.primary_gpu.gfx_queue.set_mark("Direction Light Pass");
         let (texture_mask, view_mask) = self
             .mgpu_shadow_mask
@@ -576,6 +596,7 @@ impl Application {
         );
         self.primary_gpu.gfx_queue.end_mark();
 
+        info!("Primary Gamma Correction Pass");
         self.primary_gpu.gfx_queue.set_mark("Gamma Correction Pass");
         self.p_gamma_correction_pass.render(
             &self.primary_gpu,
@@ -809,6 +830,16 @@ impl ApplicationHandler for Application {
 }
 
 fn main() {
+    let console_log = fmt::Layer::new().with_ansi(true).with_writer(
+        std::io::stdout
+            .with_min_level(tracing::Level::ERROR)
+            .with_max_level(tracing::Level::INFO),
+    );
+
+    let subscriber = tracing_subscriber::registry().with(console_log);
+
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
     let event_loop = EventLoop::new().unwrap();
 
     event_loop.set_control_flow(ControlFlow::Poll);
