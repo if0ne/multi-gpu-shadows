@@ -497,10 +497,10 @@ impl Application {
                 }
                 rhi::SharedTextureState::Binded { cross, local } => {
                     list.set_device_texture_barriers(&[
-                        (cross, dx::ResourceStates::CopyDest),
-                        (local, dx::ResourceStates::CopySource),
+                        (cross, dx::ResourceStates::CopySource),
+                        (local, dx::ResourceStates::CopyDest),
                     ]);
-                    list.copy_texture_to_texture(cross, local);
+                    list.copy_texture_to_texture(local, cross);
                 }
             };
 
@@ -533,10 +533,10 @@ impl Application {
                 }
                 rhi::SharedTextureState::Binded { cross, local } => {
                     list.set_device_texture_barriers(&[
-                        (cross, dx::ResourceStates::CopyDest),
-                        (local, dx::ResourceStates::CopySource),
+                        (cross, dx::ResourceStates::CopySource),
+                        (local, dx::ResourceStates::CopyDest),
                     ]);
-                    list.copy_texture_to_texture(cross, local);
+                    list.copy_texture_to_texture(local, cross);
                 }
             };
 
