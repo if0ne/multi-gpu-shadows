@@ -492,9 +492,9 @@ impl Application {
             };
 
             self.secondary_gpu.gfx_queue.push_cmd_buffer(list);
-            self.mgpu_shadow_mask.write_values[working_texture] =
-                self.secondary_gpu.gfx_queue.execute();
-            self.secondary_gpu
+            self.secondary_gpu.gfx_queue.execute();
+            self.mgpu_shadow_mask.write_values[working_texture] = self
+                .secondary_gpu
                 .gfx_queue
                 .signal_shared(&self.mgpu_shadow_mask.sender_fence);
             self.mgpu_shadow_mask.next_working_texture();
@@ -525,9 +525,6 @@ impl Application {
 
             self.primary_gpu.copy_queue.push_cmd_buffer(list);
             self.mgpu_shadow_mask.read_values[copy_texture] = self.primary_gpu.copy_queue.execute();
-            self.primary_gpu
-                .copy_queue
-                .signal_shared(&self.mgpu_shadow_mask.recv_fence);
             self.mgpu_shadow_mask.next_copy_texture();
         }
 
