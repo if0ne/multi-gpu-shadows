@@ -552,6 +552,14 @@ impl ApplicationHandler for Application {
                     );
                     self.curr_frame = 0;
 
+                    self.zpass = ZPass::new(
+                        &self.device,
+                        size.width,
+                        size.height,
+                        &mut self.shader_cache,
+                        &mut self.pso_cache,
+                    );
+
                     self.gbuffer = GbufferPass::new(
                         size.width,
                         size.height,
