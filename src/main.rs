@@ -8,6 +8,7 @@ mod rhi;
 mod shadow_mask_pass;
 mod timer;
 mod utils;
+mod zpass;
 
 use std::{cell::RefCell, collections::HashMap, num::NonZero, sync::Arc, time::Duration};
 
@@ -31,6 +32,7 @@ use winit::{
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::Window,
 };
+use zpass::ZPass;
 
 pub struct WindowContext {
     pub window: Window,
@@ -98,6 +100,7 @@ pub struct Application {
     pub window_width: u32,
     pub window_height: u32,
 
+    pub zpass: ZPass,
     pub gbuffer: GbufferPass,
     pub csm: CascadedShadowMapsPass,
     pub shadow_mask: ShadowMaskPass,
@@ -231,6 +234,7 @@ impl Application {
         let mut pso_cache = rhi::RasterPipelineCache::new(&device);
         let placeholder = TexturePlaceholders::new(&device);
 
+        let zpass = ZPass::new(&device, width, height, &mut shader_cache, &mut pso_cache);
         let gbuffer = GbufferPass::new(width, height, &device, &mut shader_cache, &mut pso_cache);
         let csm =
             CascadedShadowMapsPass::new(&device, 2 * 1024, 0.5, &mut shader_cache, &mut pso_cache);
@@ -273,6 +277,7 @@ impl Application {
             keys: HashMap::new(),
             gpu_mesh,
 
+            zpass,
             csm,
             gbuffer,
             shadow_mask,
@@ -359,6 +364,14 @@ impl Application {
 
         self.device.gfx_queue.stash_cmd_buffer(list);
 
+        self.zpass.render(
+            &self.device,
+            &self.camera_buffers,
+            &self.pso_cache,
+            self.curr_frame,
+            &self.gpu_mesh,
+        );
+
         self.csm.render(
             &self.device,
             &self.gpu_mesh,
@@ -373,6 +386,7 @@ impl Application {
             &self.pso_cache,
             &self.camera_buffers,
             self.curr_frame,
+            &self.zpass,
         );
 
         self.shadow_mask.render(
@@ -380,7 +394,7 @@ impl Application {
             &self.camera_buffers,
             &self.pso_cache,
             self.curr_frame,
-            (&self.gbuffer.depth, &self.gbuffer.depth_srv),
+            &self.zpass,
             &self.csm,
         );
 

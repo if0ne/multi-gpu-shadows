@@ -1798,12 +1798,12 @@ impl RasterPipeline {
         let de = if let Some(depth) = &desc.depth {
             de.with_depth_stencil(
                 dx::DepthStencilDesc::default()
-                .enable_depth(depth.op.as_dx())
-                .with_depth_write_mask(if depth.read_only {
-                    dx::DepthWriteMask::empty()
-                } else {
-                    dx::DepthWriteMask::All
-                }),
+                    .enable_depth(depth.op.as_dx())
+                    .with_depth_write_mask(if depth.read_only {
+                        dx::DepthWriteMask::empty()
+                    } else {
+                        dx::DepthWriteMask::All
+                    }),
                 depth.format,
             )
         } else {

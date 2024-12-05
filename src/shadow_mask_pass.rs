@@ -2,7 +2,7 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use oxidx::dx;
 
-use crate::{csm_pass::CascadedShadowMapsPass, rhi};
+use crate::{csm_pass::CascadedShadowMapsPass, rhi, zpass::ZPass};
 
 #[derive(Debug)]
 pub struct ShadowMaskPass {
@@ -133,7 +133,7 @@ impl ShadowMaskPass {
         camera_buffer: &rhi::Buffer,
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
-        depth: (&rhi::DeviceTexture, &rhi::DeviceTextureView),
+        depth: &ZPass,
         csm: &CascadedShadowMapsPass,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
@@ -144,7 +144,7 @@ impl ShadowMaskPass {
         list.set_topology(rhi::GeomTopology::Triangles);
         list.set_device_texture_barriers(&[
             (&self.texture, dx::ResourceStates::RenderTarget),
-            (depth.0, dx::ResourceStates::PixelShaderResource),
+            (&depth.depth, dx::ResourceStates::PixelShaderResource),
             (&csm.texture, dx::ResourceStates::PixelShaderResource),
         ]);
 
@@ -160,7 +160,7 @@ impl ShadowMaskPass {
 
         list.set_graphics_cbv(&csm.gpu_csm_buffer.cbv[frame_idx], 1);
 
-        list.set_graphics_srv(depth.1, 2);
+        list.set_graphics_srv(&depth.depth_srv, 2);
         list.set_graphics_srv(&csm.srv, 3);
         list.draw(3);
 

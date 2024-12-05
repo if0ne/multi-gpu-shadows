@@ -2,7 +2,7 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use oxidx::dx;
 
-use crate::{gltf::GpuMesh, rhi, TexturePlaceholders};
+use crate::{gltf::GpuMesh, rhi, zpass::ZPass, TexturePlaceholders};
 
 #[derive(Debug)]
 pub struct GbufferPass {
@@ -24,10 +24,6 @@ pub struct GbufferPass {
     pub accum: rhi::DeviceTexture,
     pub accum_rtv: rhi::DeviceTextureView,
     pub accum_srv: rhi::DeviceTextureView,
-
-    pub depth: rhi::DeviceTexture,
-    pub depth_dsv: rhi::DeviceTextureView,
-    pub depth_srv: rhi::DeviceTextureView,
 
     pub vs: rhi::ShaderHandle,
     pub ps: rhi::ShaderHandle,
@@ -264,7 +260,7 @@ impl GbufferPass {
                 depth: Some(rhi::DepthDesc {
                     op: rhi::DepthOp::LessEqual,
                     format: dx::Format::D24UnormS8Uint,
-                    read_only: false,
+                    read_only: true,
                 }),
                 wireframe: false,
                 signature: Some(rs),
@@ -296,9 +292,6 @@ impl GbufferPass {
             accum,
             accum_rtv,
             accum_srv,
-            depth,
-            depth_dsv,
-            depth_srv,
             vs,
             ps,
             pso,
@@ -313,6 +306,7 @@ impl GbufferPass {
         pso_cache: &rhi::RasterPipelineCache,
         camera_buffer: &rhi::Buffer,
         frame_idx: usize,
+        depth: &ZPass,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
         list.set_mark("G Pass");
@@ -322,18 +316,17 @@ impl GbufferPass {
             (&self.normal, dx::ResourceStates::RenderTarget),
             (&self.material, dx::ResourceStates::RenderTarget),
             (&self.accum, dx::ResourceStates::RenderTarget),
-            (&self.depth, dx::ResourceStates::DepthWrite),
+            (&depth.depth, dx::ResourceStates::DepthRead),
         ]);
 
         list.clear_render_target(&self.diffuse_rtv, 0.301, 0.5607, 0.675);
         list.clear_render_target(&self.normal_rtv, 0.0, 0.0, 0.0);
         list.clear_render_target(&self.material_rtv, 0.0, 0.0, 0.0);
         list.clear_render_target(&self.accum_rtv, 0.0, 0.0, 0.0);
-        list.clear_depth_target(&self.depth_dsv);
 
         list.set_render_targets(
             &[&self.diffuse_rtv, &self.normal_rtv, &self.material_rtv],
-            Some(&self.depth_dsv),
+            Some(&depth.depth_dsv),
         );
         list.set_viewport(self.width, self.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
