@@ -294,7 +294,7 @@ impl Application {
             width,
             height,
             &mut shader_cache,
-            &mut primary_pso_cache,
+            &mut secondary_pso_cache,
         );
 
         let camera = Camera {
@@ -656,6 +656,10 @@ impl Drop for Application {
         self.primary_gpu.gfx_queue.wait_idle();
         self.primary_gpu.compute_queue.wait_idle();
         self.primary_gpu.copy_queue.wait_idle();
+
+        self.secondary_gpu.gfx_queue.wait_idle();
+        self.secondary_gpu.compute_queue.wait_idle();
+        self.secondary_gpu.copy_queue.wait_idle();
     }
 }
 
@@ -722,6 +726,9 @@ impl ApplicationHandler for Application {
                     self.window_height = size.height;
 
                     self.primary_gpu.gfx_queue.wait_idle();
+                    self.secondary_gpu.gfx_queue.wait_idle();
+                    self.primary_gpu.copy_queue.wait_idle();
+
                     context.swapchain.resize(
                         &self.primary_gpu,
                         size.width,
@@ -739,11 +746,11 @@ impl ApplicationHandler for Application {
                     );
 
                     self.s_zpass = ZPass::new(
-                        &self.primary_gpu,
+                        &self.secondary_gpu,
                         size.width,
                         size.height,
                         &mut self.shader_cache,
-                        &mut self.primary_pso_cache,
+                        &mut self.secondary_pso_cache,
                     );
 
                     self.p_gbuffer = GbufferPass::new(
@@ -760,7 +767,7 @@ impl ApplicationHandler for Application {
                         size.width,
                         size.height,
                         &mut self.shader_cache,
-                        &mut self.primary_pso_cache,
+                        &mut self.secondary_pso_cache,
                     );
                 }
             }

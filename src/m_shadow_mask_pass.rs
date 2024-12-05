@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use oxidx::dx;
+use oxidx::dx::{self, IDevice};
 
 use crate::{
     csm_pass::CascadedShadowMapsPass,
@@ -64,10 +64,10 @@ impl MgpuShadowMaskPass {
             )
         });
 
-        let sender_rtv = sender.map(|t| {
+        let sender_rtv = std::array::from_fn(|i| {
             rhi::DeviceTextureView::new(
                 &secondary_gpu,
-                t.local_resource(),
+                sender[i].local_resource(),
                 dx::Format::R8Unorm,
                 rhi::TextureViewType::RenderTarget,
                 None,
@@ -76,8 +76,8 @@ impl MgpuShadowMaskPass {
 
         let sender_fence = rhi::SharedFence::new(&secondary_gpu);
 
-        let recv = sender.map(|t| {
-            t.connect_texture(
+        let recv = std::array::from_fn(|i| {
+            sender[i].connect_texture(
                 &primary_gpu,
                 dx::ResourceStates::PixelShaderResource,
                 dx::ResourceStates::CopyDest,
@@ -86,10 +86,10 @@ impl MgpuShadowMaskPass {
             )
         });
 
-        let recv_srv = recv.map(|t| {
+        let recv_srv = std::array::from_fn(|i| {
             rhi::DeviceTextureView::new(
                 &primary_gpu,
-                t.local_resource(),
+                recv[i].local_resource(),
                 dx::Format::R8Unorm,
                 rhi::TextureViewType::ShaderResource,
                 None,
