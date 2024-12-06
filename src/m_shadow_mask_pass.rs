@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use oxidx::dx::{self, IDevice};
+use oxidx::dx;
 
 use crate::{
     csm_pass::CascadedShadowMapsPass,
@@ -15,6 +15,14 @@ use crate::{
     zpass::ZPass,
     GpuGlobals,
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MgpuState {
+    #[default]
+    WaitForWrite,
+    WaitForCopy(u64),
+    WaitForRead(u64),
+}
 
 #[derive(Debug)]
 pub struct MgpuShadowMaskPass {
@@ -34,8 +42,7 @@ pub struct MgpuShadowMaskPass {
 
     pub working_texture: AtomicUsize,
     pub copy_texture: AtomicUsize,
-    pub write_values: [u64; FRAMES_IN_FLIGHT],
-    pub read_values: [u64; FRAMES_IN_FLIGHT],
+    pub states: [MgpuState; FRAMES_IN_FLIGHT],
 }
 
 impl MgpuShadowMaskPass {
@@ -79,8 +86,8 @@ impl MgpuShadowMaskPass {
         let recv = std::array::from_fn(|i| {
             sender[i].connect_texture(
                 &primary_gpu,
-                dx::ResourceStates::PixelShaderResource,
-                dx::ResourceStates::CopyDest,
+                dx::ResourceStates::Common,
+                dx::ResourceStates::Common,
                 None,
                 "Primary Shadow Mask",
             )
@@ -181,8 +188,7 @@ impl MgpuShadowMaskPass {
             camera_buffers,
             working_texture: Default::default(),
             copy_texture: Default::default(),
-            write_values: Default::default(),
-            read_values: Default::default(),
+            states: Default::default(),
         }
     }
 
@@ -231,23 +237,5 @@ impl MgpuShadowMaskPass {
     pub fn next_copy_texture(&self) {
         let idx = (self.copy_texture.load(Ordering::Acquire) + 1) % FRAMES_IN_FLIGHT;
         self.copy_texture.store(idx, Ordering::Release);
-    }
-
-    pub fn get_srv(
-        &self,
-        base: usize,
-        copy_queue: &rhi::CommandQueue,
-    ) -> (&rhi::SharedTexture, &rhi::DeviceTextureView) {
-        loop {
-            let base = if base == 0 {
-                FRAMES_IN_FLIGHT - 1
-            } else {
-                base - 1
-            };
-
-            if copy_queue.is_complete(self.read_values[base]) {
-                return (&self.recv[base], &self.recv_srv[base]);
-            }
-        }
     }
 }

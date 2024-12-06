@@ -166,35 +166,6 @@ impl GbufferPass {
             None,
         );
 
-        let depth = rhi::DeviceTexture::new(
-            &device,
-            width,
-            height,
-            1,
-            dx::Format::D24UnormS8Uint,
-            1,
-            dx::ResourceFlags::AllowDepthStencil,
-            dx::ResourceStates::DepthWrite,
-            Some(dx::ClearValue::depth(dx::Format::D24UnormS8Uint, 1.0, 0)),
-            "Depth Buffer",
-        );
-
-        let depth_dsv = rhi::DeviceTextureView::new(
-            &device,
-            &depth,
-            depth.format,
-            rhi::TextureViewType::DepthTarget,
-            None,
-        );
-
-        let depth_srv = rhi::DeviceTextureView::new(
-            &device,
-            &depth,
-            dx::Format::R24UnormX8Typeless,
-            rhi::TextureViewType::ShaderResource,
-            None,
-        );
-
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
             rhi::RootSignatureDesc {
@@ -258,7 +229,7 @@ impl GbufferPass {
                 vs,
                 line: false,
                 depth: Some(rhi::DepthDesc {
-                    op: rhi::DepthOp::LessEqual,
+                    op: rhi::DepthOp::Equal,
                     format: dx::Format::D24UnormS8Uint,
                     read_only: true,
                 }),

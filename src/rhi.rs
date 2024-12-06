@@ -1524,6 +1524,7 @@ impl RootSignature {
 pub enum DepthOp {
     None,
     Less,
+    Equal,
     LessEqual,
     Greater,
 }
@@ -1535,6 +1536,7 @@ impl DepthOp {
             DepthOp::Less => dx::ComparisonFunc::Less,
             DepthOp::LessEqual => dx::ComparisonFunc::LessEqual,
             DepthOp::Greater => dx::ComparisonFunc::Greater,
+            DepthOp::Equal => dx::ComparisonFunc::Equal,
         }
     }
 }

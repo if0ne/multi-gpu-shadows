@@ -162,6 +162,7 @@ impl DirectionalLightPass {
         list.set_graphics_srv(&shadow_mask.1, 6);
         list.draw(3);
 
+        list.set_device_texture_barrier(shadow_mask.0, dx::ResourceStates::Common, None);
         device.gfx_queue.stash_cmd_buffer(list);
     }
 }

@@ -26,7 +26,7 @@ use gamma_correction_pass::GammaCorrectionPass;
 use gbuffer_pass::GbufferPass;
 use glam::{vec2, vec3, Mat4, Vec2, Vec3};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
-use m_shadow_mask_pass::MgpuShadowMaskPass;
+use m_shadow_mask_pass::{MgpuShadowMaskPass, MgpuState};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use timer::GameTimer;
@@ -241,7 +241,7 @@ impl Application {
             .get_high_perf_device()
             .unwrap_or_else(|| device_manager.get_warp());
 
-        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
+        let mesh = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
 
         let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
             mesh,
@@ -422,17 +422,18 @@ impl Application {
 
         info!("Beginning rendering");
 
+        let copy_texture = self.mgpu_shadow_mask.copy_texture.load(Ordering::Acquire);
         let working_texture = self
             .mgpu_shadow_mask
             .working_texture
             .load(Ordering::Acquire);
 
-        if self.mgpu_shadow_mask.sender_fence.get_completed_value()
-            >= self.mgpu_shadow_mask.write_values[working_texture]
+        if self.secondary_gpu.gfx_queue.is_ready()
+            && self.mgpu_shadow_mask.states[working_texture] == MgpuState::WaitForWrite
         {
             info!("Recording to secondary gpu");
             self.s_csm
-                .update(&self.camera, vec3(-1.0, -1.0, -1.0), self.curr_frame);
+                .update(&self.camera, vec3(-1.0, -1.0, -1.0), working_texture);
 
             self.mgpu_shadow_mask.camera_buffers.write(
                 working_texture,
@@ -497,8 +498,8 @@ impl Application {
                 }
                 rhi::SharedTextureState::Binded { cross, local } => {
                     list.set_device_texture_barriers(&[
-                        (cross, dx::ResourceStates::CopySource),
-                        (local, dx::ResourceStates::CopyDest),
+                        (cross, dx::ResourceStates::Common),
+                        (local, dx::ResourceStates::Common),
                     ]);
                     list.copy_texture_to_texture(local, cross);
                 }
@@ -508,42 +509,17 @@ impl Application {
 
             self.secondary_gpu.gfx_queue.push_cmd_buffer(list);
             self.secondary_gpu.gfx_queue.execute();
-            self.mgpu_shadow_mask.write_values[working_texture] = self
-                .secondary_gpu
-                .gfx_queue
-                .signal_shared(&self.mgpu_shadow_mask.sender_fence);
-            self.mgpu_shadow_mask.next_working_texture();
+            self.mgpu_shadow_mask.states[working_texture] = MgpuState::WaitForCopy(
+                self.secondary_gpu
+                    .gfx_queue
+                    .signal_shared(&self.mgpu_shadow_mask.sender_fence),
+            );
         }
 
-        let copy_texture = self.mgpu_shadow_mask.copy_texture.load(Ordering::Acquire);
-
-        if self.mgpu_shadow_mask.recv_fence.get_completed_value()
-            >= self.mgpu_shadow_mask.write_values[copy_texture]
-        {
-            info!("Copy shadow mask to primary gpu");
-
-            let list = self
-                .primary_gpu
-                .copy_queue
-                .get_command_buffer(&self.primary_gpu);
-
-            match &self.mgpu_shadow_mask.recv[copy_texture].state {
-                rhi::SharedTextureState::CrossAdapter { .. } => {
-                    // noop
-                }
-                rhi::SharedTextureState::Binded { cross, local } => {
-                    list.set_device_texture_barriers(&[
-                        (cross, dx::ResourceStates::CopySource),
-                        (local, dx::ResourceStates::CopyDest),
-                    ]);
-                    list.copy_texture_to_texture(local, cross);
-                }
-            };
-
-            self.primary_gpu.copy_queue.push_cmd_buffer(list);
-            self.mgpu_shadow_mask.read_values[copy_texture] = self.primary_gpu.copy_queue.execute();
-            self.mgpu_shadow_mask.next_copy_texture();
-        }
+        dbg!(working_texture);
+        dbg!(copy_texture);
+        dbg!(self.mgpu_shadow_mask.recv_fence.get_completed_value());
+        dbg!(self.mgpu_shadow_mask.states[copy_texture]);
 
         let list = self
             .primary_gpu
@@ -581,11 +557,74 @@ impl Application {
         );
         self.primary_gpu.gfx_queue.end_mark();
 
+        if let MgpuState::WaitForCopy(v) = self.mgpu_shadow_mask.states[copy_texture] {
+            if self.primary_gpu.copy_queue.is_ready()
+                && self.mgpu_shadow_mask.recv_fence.get_completed_value() >= v
+            {
+                self.mgpu_shadow_mask.next_working_texture();
+
+                info!("Copy shadow mask to primary gpu");
+                let list = self
+                    .primary_gpu
+                    .copy_queue
+                    .get_command_buffer(&self.primary_gpu);
+
+                match &self.mgpu_shadow_mask.recv[copy_texture].state {
+                    rhi::SharedTextureState::CrossAdapter { .. } => {
+                        // noop
+                    }
+                    rhi::SharedTextureState::Binded { cross, local } => {
+                        list.set_device_texture_barriers(&[
+                            (cross, dx::ResourceStates::CopySource),
+                            (local, dx::ResourceStates::CopyDest),
+                        ]);
+                        list.copy_texture_to_texture(local, cross);
+                    }
+                };
+
+                self.primary_gpu.copy_queue.push_cmd_buffer(list);
+                self.mgpu_shadow_mask.states[copy_texture] =
+                    MgpuState::WaitForRead(self.primary_gpu.copy_queue.execute());
+            }
+        }
+
         info!("Primary Direction Light Pass");
         self.primary_gpu.gfx_queue.set_mark("Direction Light Pass");
-        let (texture_mask, view_mask) = self
-            .mgpu_shadow_mask
-            .get_srv(copy_texture, &self.primary_gpu.copy_queue);
+        let (texture_mask, view_mask) =
+            if let MgpuState::WaitForRead(v) = self.mgpu_shadow_mask.states[copy_texture] {
+                if self.primary_gpu.copy_queue.is_complete(v) {
+                    dbg!("Get copy texture");
+                    self.mgpu_shadow_mask.next_copy_texture();
+                    self.mgpu_shadow_mask.states[copy_texture] = MgpuState::WaitForWrite;
+                    (
+                        &self.mgpu_shadow_mask.recv[copy_texture],
+                        &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                    )
+                } else {
+                    let copy_texture = if copy_texture == 0 {
+                        FRAMES_IN_FLIGHT - 1
+                    } else {
+                        copy_texture - 1
+                    };
+
+                    (
+                        &self.mgpu_shadow_mask.recv[copy_texture],
+                        &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                    )
+                }
+            } else {
+                let copy_texture = if copy_texture == 0 {
+                    FRAMES_IN_FLIGHT - 1
+                } else {
+                    copy_texture - 1
+                };
+
+                (
+                    &self.mgpu_shadow_mask.recv[copy_texture],
+                    &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                )
+            };
+
         self.p_dir_light_pass.render(
             &self.primary_gpu,
             &self.camera_buffers,
