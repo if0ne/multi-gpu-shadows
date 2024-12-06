@@ -2619,15 +2619,15 @@ impl CommandBuffer {
         upload_buffer: &DeviceBuffer,
         data: &[u8],
     ) {
-        debug_assert!(
-            self.list.update_subresources_fixed::<1, _, _>(
-                &dst.res.res,
-                &upload_buffer.res.res,
-                0,
-                0..1,
-                &[dx::SubresourceData::new(data).with_row_pitch(4 * dst.width as usize)],
-            ) > 0
+        let copied = self.list.update_subresources_fixed::<1, _, _>(
+            &dst.res.res,
+            &upload_buffer.res.res,
+            0,
+            0..1,
+            &[dx::SubresourceData::new(data).with_row_pitch(4 * dst.width as usize)],
         );
+
+        debug_assert!(copied > 0);
     }
 
     pub fn copy_buffer_to_buffer(&self, dst: &Buffer, src: &Buffer) {

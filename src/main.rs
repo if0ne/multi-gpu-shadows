@@ -241,7 +241,7 @@ impl Application {
             .get_high_perf_device()
             .unwrap_or_else(|| device_manager.get_warp());
 
-        let mesh = Mesh::load("./assets/pica_pica_-_mini_diorama_01/scene.gltf");
+        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
 
         let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
             mesh,
