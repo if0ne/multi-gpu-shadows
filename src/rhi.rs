@@ -292,6 +292,15 @@ impl Device {
         let name = name.as_ref().to_string();
         let uuid = new_uuid();
 
+        let clear_value = if desc
+            .flags()
+            .contains(dx::ResourceFlags::AllowDepthStencil | dx::ResourceFlags::AllowRenderTarget)
+        {
+            clear_value
+        } else {
+            None
+        };
+
         let res = self
             .gpu
             .create_placed_resource(heap, 0, desc, state, clear_value.as_ref())
@@ -904,7 +913,9 @@ impl SharedTexture {
             .with_layout(dx::TextureLayout::Unknown)
             .with_flags(flags);
 
-        let (flags, state) = if device.is_cross_adapter_texture_supported {
+        let (flags, state) = if device.is_cross_adapter_texture_supported
+            && !flags.contains(dx::ResourceFlags::AllowDepthStencil)
+        {
             (
                 dx::ResourceFlags::AllowCrossAdapter | desc.flags(),
                 local_state,
@@ -920,7 +931,7 @@ impl SharedTexture {
 
         let size = device
             .gpu
-            .get_copyable_footprints(&cross_desc, 0..array, 0, None, None, None);
+            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None);
         let heap = device
             .gpu
             .create_heap(
@@ -937,13 +948,15 @@ impl SharedTexture {
             uuid: new_uuid(),
             width,
             height,
-            array: 1,
+            array,
             levels: 1,
             format,
             state: RefCell::new(state),
         };
 
-        if device.is_cross_adapter_texture_supported {
+        if device.is_cross_adapter_texture_supported
+            && !desc.flags().contains(dx::ResourceFlags::AllowDepthStencil)
+        {
             Self {
                 owner: Arc::clone(device),
                 heap,
@@ -955,7 +968,7 @@ impl SharedTexture {
                 device,
                 width,
                 height,
-                1,
+                array,
                 format,
                 1,
                 desc.flags(),

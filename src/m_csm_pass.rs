@@ -60,11 +60,11 @@ impl MgpuCascadedShadowMapsPass {
                 size,
                 size,
                 4,
-                dx::Format::D16Unorm,
+                dx::Format::D32Float,
                 dx::ResourceFlags::AllowDepthStencil,
                 dx::ResourceStates::DepthWrite,
                 dx::ResourceStates::CopySource,
-                Some(dx::ClearValue::depth(dx::Format::D16Unorm, 1.0, 0)),
+                Some(dx::ClearValue::depth(dx::Format::D32Float, 1.0, 0)),
                 "CSM",
             )
         });
@@ -82,11 +82,11 @@ impl MgpuCascadedShadowMapsPass {
         );
 
         let sender_dsvs = std::array::from_fn(|idx| {
-            let i = idx as u32;
+            let i = (idx % FRAMES_IN_FLIGHT) as u32;
             rhi::DeviceTextureView::new_in_array(
                 secondary_gpu,
-                &sender[idx / FRAMES_IN_FLIGHT].local_resource(),
-                dx::Format::R16Float,
+                &sender[idx / (FRAMES_IN_FLIGHT + 1)].local_resource(),
+                dx::Format::D32Float,
                 rhi::TextureViewType::DepthTarget,
                 i..(i + 1),
             )
@@ -108,7 +108,7 @@ impl MgpuCascadedShadowMapsPass {
             rhi::DeviceTextureView::new_in_array(
                 &primary_gpu,
                 recv[i].local_resource(),
-                dx::Format::R16Float,
+                dx::Format::R32Float,
                 rhi::TextureViewType::ShaderResource,
                 0..4,
             )
