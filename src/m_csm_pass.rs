@@ -98,7 +98,7 @@ impl MgpuCascadedShadowMapsPass {
                 dx::ResourceStates::Common,
                 dx::ResourceStates::Common,
                 None,
-                "Primary CSM",
+                format!("Primary CSM Cascade {} Frame {}", i % 4, i / 4),
             )
         });
 
@@ -280,7 +280,7 @@ impl MgpuCascadedShadowMapsPass {
             .enumerate()
             .for_each(|(i, pv)| {
                 self.gpu_csm_proj_view_buffer.write(
-                    FRAMES_IN_FLIGHT * frame_idx + i,
+                    4 * frame_idx + i,
                     GpuCSMProjView { proj_vies: *pv },
                 );
             });
@@ -301,17 +301,17 @@ impl MgpuCascadedShadowMapsPass {
 
         for i in 0..4 {
             list.set_device_texture_barrier(
-                self.sender[FRAMES_IN_FLIGHT * frame_idx + i].local_resource(),
+                self.sender[4 * frame_idx + i].local_resource(),
                 dx::ResourceStates::DepthWrite,
                 None,
             );
-            list.clear_depth_target(&self.sender_dsvs[FRAMES_IN_FLIGHT * frame_idx + i]);
+            list.clear_depth_target(&self.sender_dsvs[4 * frame_idx + i]);
             list.set_render_targets(
                 &[],
-                Some(&self.sender_dsvs[FRAMES_IN_FLIGHT * frame_idx + i]),
+                Some(&self.sender_dsvs[4 * frame_idx + i]),
             );
             list.set_graphics_cbv(
-                &self.gpu_csm_proj_view_buffer.cbv[FRAMES_IN_FLIGHT * frame_idx + i],
+                &self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i],
                 0,
             );
 
