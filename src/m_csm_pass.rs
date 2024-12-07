@@ -279,10 +279,8 @@ impl MgpuCascadedShadowMapsPass {
             .iter()
             .enumerate()
             .for_each(|(i, pv)| {
-                self.gpu_csm_proj_view_buffer.write(
-                    4 * frame_idx + i,
-                    GpuCSMProjView { proj_vies: *pv },
-                );
+                self.gpu_csm_proj_view_buffer
+                    .write(4 * frame_idx + i, GpuCSMProjView { proj_vies: *pv });
             });
     }
 
@@ -306,14 +304,8 @@ impl MgpuCascadedShadowMapsPass {
                 None,
             );
             list.clear_depth_target(&self.sender_dsvs[4 * frame_idx + i]);
-            list.set_render_targets(
-                &[],
-                Some(&self.sender_dsvs[4 * frame_idx + i]),
-            );
-            list.set_graphics_cbv(
-                &self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i],
-                0,
-            );
+            list.set_render_targets(&[], Some(&self.sender_dsvs[4 * frame_idx + i]));
+            list.set_graphics_cbv(&self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i], 0);
 
             list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
             list.set_index_buffer(&gpu_mesh.ib);

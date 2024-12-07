@@ -447,10 +447,10 @@ impl Application {
                     }
                     rhi::SharedTextureState::Binded { cross, local } => {
                         list.set_device_texture_barriers(&[
-                            (&cross, dx::ResourceStates::CopySource),
-                            (&local, dx::ResourceStates::CopyDest),
+                            (&cross, dx::ResourceStates::CopyDest),
+                            (&local, dx::ResourceStates::CopySource),
                         ]);
-                        list.copy_texture_to_texture(&local, &cross);
+                        list.copy_texture_to_texture(cross, local);
                     }
                 };
             }
@@ -537,43 +537,40 @@ impl Application {
 
         info!("Primary Direction Light Pass");
         self.primary_gpu.gfx_queue.set_mark("Direction Light Pass");
-        let (texture_mask, view_mask) =
-            if let MgpuState::WaitForRead(v) = self.mgpu_csm.states[copy_texture] {
-                if self.primary_gpu.copy_queue.is_complete(v) {
-                    dbg!("Get copy texture");
-                    self.mgpu_csm.next_copy_texture();
-                    self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
-                    (
-                        &self.mgpu_csm.recv[(copy_texture * 4)
-                            ..(copy_texture * 4 + 4)],
-                        &self.mgpu_csm.recv_srv[copy_texture * 4],
-                    )
-                } else {
-                    let copy_texture = if copy_texture == 0 {
-                        FRAMES_IN_FLIGHT - 1
-                    } else {
-                        copy_texture - 1
-                    };
 
-                    (
-                        &self.mgpu_csm.recv[(copy_texture * 4)
-                            ..(copy_texture * 4 + 4)],
-                        &self.mgpu_csm.recv_srv[copy_texture * 4],
-                    )
-                }
+        let copy_texture = if let MgpuState::WaitForRead(v) = self.mgpu_csm.states[copy_texture] {
+            if self.primary_gpu.copy_queue.is_complete(v) {
+                dbg!("Get copy texture");
+                self.mgpu_csm.next_copy_texture();
+                self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
+                copy_texture
             } else {
-                let copy_texture = if copy_texture == 0 {
+                if copy_texture == 0 {
                     FRAMES_IN_FLIGHT - 1
                 } else {
                     copy_texture - 1
-                };
+                }
+            }
+        } else {
+            if copy_texture == 0 {
+                FRAMES_IN_FLIGHT - 1
+            } else {
+                copy_texture - 1
+            }
+        };
 
-                (
-                    &self.mgpu_csm.recv
-                        [(copy_texture * 4)..(copy_texture * 4 + 4)],
-                    &self.mgpu_csm.recv_srv[copy_texture * 4],
-                )
-            };
+        let (texture_mask, view_mask, desc) = {
+            (
+                &self.mgpu_csm.recv[(copy_texture * 4)..(copy_texture * 4 + 4)],
+                &self.mgpu_csm.recv_srv[copy_texture * 4],
+                &self
+                    .mgpu_csm
+                    .gpu_csm_buffer
+                    .get_buffer(self.primary_gpu.id)
+                    .unwrap()
+                    .cbv[copy_texture],
+            )
+        };
 
         let texture_mask = texture_mask
             .iter()
@@ -586,16 +583,7 @@ impl Application {
             &self.primary_pso_cache,
             self.curr_frame,
             &self.p_gbuffer,
-            (
-                &texture_mask,
-                view_mask,
-                &self
-                    .mgpu_csm
-                    .gpu_csm_buffer
-                    .get_buffer(self.primary_gpu.id)
-                    .unwrap()
-                    .cbv[copy_texture],
-            ),
+            (&texture_mask, view_mask, desc),
         );
         self.primary_gpu.gfx_queue.end_event();
 
