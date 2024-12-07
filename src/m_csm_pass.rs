@@ -8,7 +8,7 @@ use std::{
 };
 
 use glam::{vec4, Vec4Swizzles};
-use oxidx::dx;
+use oxidx::dx::{self, IResource};
 
 use crate::{
     camera::Camera,
@@ -82,10 +82,10 @@ impl MgpuCascadedShadowMapsPass {
         );
 
         let sender_dsvs = std::array::from_fn(|idx| {
-            let i = (idx % FRAMES_IN_FLIGHT) as u32;
+            let i = (idx % (FRAMES_IN_FLIGHT + 1)) as u32;
             rhi::DeviceTextureView::new_in_array(
                 secondary_gpu,
-                &sender[idx / (FRAMES_IN_FLIGHT + 1)].local_resource(),
+                &sender[idx / 4].local_resource(),
                 dx::Format::D32Float,
                 rhi::TextureViewType::DepthTarget,
                 i..(i + 1),

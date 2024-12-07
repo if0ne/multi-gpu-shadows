@@ -1070,7 +1070,7 @@ impl SharedTexture {
                 &other,
                 cross_res.width,
                 cross_res.height,
-                1,
+                cross_res.array,
                 cross_res.format,
                 1,
                 self.desc.flags(),
