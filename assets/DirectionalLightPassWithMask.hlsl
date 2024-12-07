@@ -1,5 +1,4 @@
 #include "Common.hlsl"
-#include "ShadowCommon.hlsl"
 #include "Light.hlsl"
 #include "Pbr.hlsl"
 #include "FullscreenVS.hlsl"
@@ -8,26 +7,18 @@ cbuffer GlobalBuffer : register(b0) {
     Globals g_data;
 }
 
-cbuffer DirectionalLightBuffer : register(b1)
-{
+cbuffer DirectionalLightBuffer : register(b1) {
     DirectionalLight dir_light;
 }
 
-cbuffer AmbientLightBuffer : register(b2)
-{
+cbuffer AmbientLightBuffer : register(b2) {
     AmbientLight ambient_light;
 }
 
-cbuffer CsmBuffer : register(b3) {
-    CsmData csm_data;
-}
-
-Texture2D diffuse_t : register(t4);
-Texture2D normal_t : register(t5);
-Texture2D material_t : register(t6);
-Texture2DArray csm_t : register(t7);
-
-SamplerComparisonState comp_shadow_s : register(s0);
+Texture2D diffuse_t : register(t3);
+Texture2D normal_t : register(t4);
+Texture2D material_t : register(t5);
+Texture2D shadow_mask_t : register(t6);
 
 float3 compute_dir_light(float4 diffuse, float3 normal, float3 to_eye, float4 material) {
     float3 lightVec = -dir_light.direction;
@@ -48,23 +39,11 @@ float4 Main(FullscreenVertex input) : SV_Target {
     float4 diffuse = diffuse_t.Load(int3(tex_coord, 0));
     float3 normal = unpack_normal_from_texture(normal_t.Load(int3(tex_coord, 0)));
     float4 material = material_t.Load(int3(tex_coord, 0));
+    float shadow_factor = shadow_mask_t.Load(int3(tex_coord, 0)).r;
 
     float depth = material.w;
     float4 world_pos = screen_to_world(float4(tex_coord, depth, 1.0f), g_data.screen_dim, g_data.inv_proj_view);
-
-    float fragment_dist = mul(g_data.view, world_pos).z;
-    uint cascade_idx = 0;
-
-     for (uint i = 0; i < 4 - 1; ++i)
-    {
-        if (fragment_dist > csm_data.split_distances[i])
-        {
-            cascade_idx = i + 1;
-        }
-    }
-
-    float shadow_factor = sample_csm(csm_t, comp_shadow_s, mul(csm_data.proj_view[cascade_idx], world_pos), cascade_idx);
-
+    
     float3 to_eye = normalize(g_data.eye_pos - world_pos.xyz);
     float4 ambient = ambient_light.color * diffuse;
 

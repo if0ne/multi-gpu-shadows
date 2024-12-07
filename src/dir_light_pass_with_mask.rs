@@ -22,13 +22,13 @@ pub struct GpuAmbientLight {
 }
 
 #[derive(Debug)]
-pub struct DirectionalLightPass {
+pub struct DirectionalLightWithMaskPass {
     pub dir_light_buffer: rhi::DeviceBuffer,
     pub ambient_light_buffer: rhi::DeviceBuffer,
     pub pso: rhi::PipelineHandle,
 }
 
-impl DirectionalLightPass {
+impl DirectionalLightWithMaskPass {
     pub fn new(
         device: &Arc<rhi::Device>,
         shader_cache: &mut rhi::ShaderCache,
@@ -67,19 +67,12 @@ impl DirectionalLightPass {
                     rhi::BindingEntry::Cbv { num: 1, slot: 0 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 1 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 2 },
-                    rhi::BindingEntry::Cbv { num: 1, slot: 3 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 3 },
                     rhi::BindingEntry::Srv { num: 1, slot: 4 },
                     rhi::BindingEntry::Srv { num: 1, slot: 5 },
                     rhi::BindingEntry::Srv { num: 1, slot: 6 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 7 },
                 ],
-                static_samplers: vec![rhi::StaticSampler {
-                    slot: 0,
-                    filter: dx::Filter::ComparisonLinear,
-                    address_mode: dx::AddressMode::Border,
-                    comp_func: dx::ComparisonFunc::LessEqual,
-                    b_color: dx::BorderColor::OpaqueWhite,
-                }],
+                static_samplers: vec![],
                 bindless: false,
             },
         ));
@@ -94,7 +87,7 @@ impl DirectionalLightPass {
 
         let ps = shader_cache.get_shader_by_desc(rhi::ShaderDesc {
             ty: rhi::ShaderType::Pixel,
-            path: PathBuf::from("assets/DirectionalLightPass.hlsl"),
+            path: PathBuf::from("assets/DirectionalLightPassWithMask.hlsl"),
             entry_point: "Main".to_string(),
             debug: true,
             defines: vec![],
@@ -142,11 +135,7 @@ impl DirectionalLightPass {
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
         gbuffer: &GbufferPass,
-        csm: (
-            &rhi::DeviceTexture,
-            &rhi::DeviceTextureView,
-            &rhi::Descriptor,
-        ),
+        shadow_mask: (&rhi::DeviceTexture, &rhi::DeviceTextureView),
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
 
@@ -157,7 +146,7 @@ impl DirectionalLightPass {
             (&gbuffer.diffuse, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.normal, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.material, dx::ResourceStates::PixelShaderResource),
-            (&csm.0, dx::ResourceStates::PixelShaderResource),
+            (&shadow_mask.0, dx::ResourceStates::PixelShaderResource),
         ]);
 
         list.clear_render_target(&gbuffer.accum_rtv, 0.0, 0.0, 0.0);
@@ -166,15 +155,14 @@ impl DirectionalLightPass {
 
         list.set_graphics_cbv(&self.dir_light_buffer.cbv[0], 1);
         list.set_graphics_cbv(&self.ambient_light_buffer.cbv[0], 2);
-        list.set_graphics_cbv(csm.2, 3);
 
-        list.set_graphics_srv(&gbuffer.diffuse_srv, 4);
-        list.set_graphics_srv(&gbuffer.normal_srv, 5);
-        list.set_graphics_srv(&gbuffer.material_srv, 6);
-        list.set_graphics_srv(&csm.1, 7);
+        list.set_graphics_srv(&gbuffer.diffuse_srv, 3);
+        list.set_graphics_srv(&gbuffer.normal_srv, 4);
+        list.set_graphics_srv(&gbuffer.material_srv, 5);
+        list.set_graphics_srv(&shadow_mask.1, 6);
         list.draw(3);
 
-        list.set_device_texture_barrier(csm.0, dx::ResourceStates::Common, None);
+        list.set_device_texture_barrier(shadow_mask.0, dx::ResourceStates::Common, None);
         device.gfx_queue.stash_cmd_buffer(list);
     }
 }

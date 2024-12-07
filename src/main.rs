@@ -1,9 +1,11 @@
 mod camera;
 mod csm_pass;
 mod dir_light_pass;
+mod dir_light_pass_with_mask;
 mod gamma_correction_pass;
 mod gbuffer_pass;
 mod gltf;
+mod m_csm_pass;
 mod m_shadow_mask_pass;
 mod rhi;
 mod shadow_mask_pass;
@@ -22,10 +24,12 @@ use std::{
 use camera::{Camera, FpsController};
 use csm_pass::CascadedShadowMapsPass;
 use dir_light_pass::DirectionalLightPass;
+use dir_light_pass_with_mask::DirectionalLightWithMaskPass;
 use gamma_correction_pass::GammaCorrectionPass;
 use gbuffer_pass::GbufferPass;
 use glam::{vec2, vec3, Mat4, Vec2, Vec3};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
+use m_csm_pass::MgpuCascadedShadowMapsPass;
 use m_shadow_mask_pass::{MgpuShadowMaskPass, MgpuState};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
@@ -120,10 +124,7 @@ pub struct Application {
     pub p_dir_light_pass: DirectionalLightPass,
     pub p_gamma_correction_pass: GammaCorrectionPass,
 
-    pub s_zpass: ZPass,
-    pub s_csm: CascadedShadowMapsPass,
-
-    pub mgpu_shadow_mask: MgpuShadowMaskPass,
+    pub mgpu_csm: MgpuCascadedShadowMapsPass,
 }
 
 pub struct TexturePlaceholders {
@@ -278,26 +279,11 @@ impl Application {
         let p_gamma_correction_pass =
             GammaCorrectionPass::new(&primary_gpu, &mut shader_cache, &mut primary_pso_cache);
 
-        let s_zpass = ZPass::new(
-            &secondary_gpu,
-            width,
-            height,
-            &mut shader_cache,
-            &mut secondary_pso_cache,
-        );
-        let s_csm = CascadedShadowMapsPass::new(
-            &secondary_gpu,
-            2 * 1024,
-            0.5,
-            &mut shader_cache,
-            &mut secondary_pso_cache,
-        );
-
-        let mgpu_shadow_mask = MgpuShadowMaskPass::new(
+        let mgpu_csm = MgpuCascadedShadowMapsPass::new(
             &primary_gpu,
             &secondary_gpu,
-            width,
-            height,
+            1024,
+            0.5,
             &mut shader_cache,
             &mut secondary_pso_cache,
         );
@@ -347,10 +333,7 @@ impl Application {
             p_dir_light_pass,
             p_gamma_correction_pass,
 
-            s_zpass,
-            s_csm,
-
-            mgpu_shadow_mask,
+            mgpu_csm,
         }
     }
 
@@ -422,35 +405,14 @@ impl Application {
 
         info!("Beginning rendering");
 
-        let copy_texture = self.mgpu_shadow_mask.copy_texture.load(Ordering::Acquire);
-        let working_texture = self
-            .mgpu_shadow_mask
-            .working_texture
-            .load(Ordering::Acquire);
+        let copy_texture = self.mgpu_csm.copy_texture.load(Ordering::Acquire);
+        let working_texture = self.mgpu_csm.working_texture.load(Ordering::Acquire);
 
         if self.secondary_gpu.gfx_queue.is_ready()
-            && self.mgpu_shadow_mask.states[working_texture] == MgpuState::WaitForWrite
+            && self.mgpu_csm.states[working_texture] == MgpuState::WaitForWrite
         {
             info!("Recording to secondary gpu");
-            self.s_csm
-                .update(&self.camera, vec3(-1.0, -1.0, -1.0), working_texture);
-
-            self.mgpu_shadow_mask.camera_buffers.write(
-                working_texture,
-                GpuGlobals {
-                    view: self.camera.view,
-                    proj: self.camera.proj(),
-                    eye_pos: self.camera_controller.position,
-                    proj_view: self.camera.proj() * self.camera.view,
-                    inv_view: self.camera.view.inverse(),
-                    inv_proj: self.camera.proj().inverse(),
-                    inv_proj_view: (self.camera.proj() * self.camera.view).inverse(),
-                    screen_dim: vec2(self.window_width as f32, self.window_height as f32),
-
-                    _pad0: 0.0,
-                    _pad1: Vec2::ZERO,
-                },
-            );
+            self.mgpu_csm.update(&self.camera, vec3(-1.0, -1.0, -1.0));
 
             let list = self
                 .secondary_gpu
@@ -460,29 +422,11 @@ impl Application {
             list.begin(&self.secondary_gpu);
             self.secondary_gpu.gfx_queue.stash_cmd_buffer(list);
 
-            info!("Zpass");
-            self.s_zpass.render(
-                &self.secondary_gpu,
-                &self.mgpu_shadow_mask.camera_buffers,
-                &self.secondary_pso_cache,
-                self.curr_frame,
-                &self.gpu_mesh,
-            );
-
             info!("Csm");
-            self.s_csm.render(
+            self.mgpu_csm.render(
                 &self.secondary_gpu,
                 &self.gpu_mesh,
                 &self.secondary_pso_cache,
-                self.curr_frame,
-            );
-
-            info!("ShadowMask");
-            self.mgpu_shadow_mask.render(
-                &self.secondary_gpu,
-                &self.secondary_pso_cache,
-                &self.s_zpass,
-                &self.s_csm,
             );
 
             let list = self
@@ -492,16 +436,16 @@ impl Application {
 
             info!("Try copy");
 
-            match &self.mgpu_shadow_mask.sender[working_texture].state {
+            match &self.mgpu_csm.sender[working_texture].state {
                 rhi::SharedTextureState::CrossAdapter { .. } => {
                     // noop
                 }
                 rhi::SharedTextureState::Binded { cross, local } => {
                     list.set_device_texture_barriers(&[
-                        (cross, dx::ResourceStates::Common),
-                        (local, dx::ResourceStates::Common),
+                        (&cross, dx::ResourceStates::Common),
+                        (&local, dx::ResourceStates::Common),
                     ]);
-                    list.copy_texture_to_texture(local, cross);
+                    list.copy_texture_to_texture(&local, &cross);
                 }
             };
 
@@ -509,17 +453,17 @@ impl Application {
 
             self.secondary_gpu.gfx_queue.push_cmd_buffer(list);
             self.secondary_gpu.gfx_queue.execute();
-            self.mgpu_shadow_mask.states[working_texture] = MgpuState::WaitForCopy(
+            self.mgpu_csm.states[working_texture] = MgpuState::WaitForCopy(
                 self.secondary_gpu
                     .gfx_queue
-                    .signal_shared(&self.mgpu_shadow_mask.sender_fence),
+                    .signal_shared(&self.mgpu_csm.sender_fence),
             );
         }
 
         dbg!(working_texture);
         dbg!(copy_texture);
-        dbg!(self.mgpu_shadow_mask.recv_fence.get_completed_value());
-        dbg!(self.mgpu_shadow_mask.states[copy_texture]);
+        dbg!(self.mgpu_csm.recv_fence.get_completed_value());
+        dbg!(self.mgpu_csm.states[copy_texture]);
 
         let list = self
             .primary_gpu
@@ -542,7 +486,7 @@ impl Application {
             self.curr_frame,
             &self.gpu_mesh,
         );
-        self.primary_gpu.gfx_queue.end_mark();
+        self.primary_gpu.gfx_queue.end_event();
 
         info!("Primary G Pass");
         self.primary_gpu.gfx_queue.set_mark("G Pass");
@@ -555,13 +499,13 @@ impl Application {
             self.curr_frame,
             &self.p_zpass,
         );
-        self.primary_gpu.gfx_queue.end_mark();
+        self.primary_gpu.gfx_queue.end_event();
 
-        if let MgpuState::WaitForCopy(v) = self.mgpu_shadow_mask.states[copy_texture] {
+        if let MgpuState::WaitForCopy(v) = self.mgpu_csm.states[copy_texture] {
             if self.primary_gpu.copy_queue.is_ready()
-                && self.mgpu_shadow_mask.recv_fence.get_completed_value() >= v
+                && self.mgpu_csm.recv_fence.get_completed_value() >= v
             {
-                self.mgpu_shadow_mask.next_working_texture();
+                self.mgpu_csm.next_working_texture();
 
                 info!("Copy shadow mask to primary gpu");
                 let list = self
@@ -569,7 +513,7 @@ impl Application {
                     .copy_queue
                     .get_command_buffer(&self.primary_gpu);
 
-                match &self.mgpu_shadow_mask.recv[copy_texture].state {
+                match &self.mgpu_csm.recv[copy_texture].state {
                     rhi::SharedTextureState::CrossAdapter { .. } => {
                         // noop
                     }
@@ -583,7 +527,7 @@ impl Application {
                 };
 
                 self.primary_gpu.copy_queue.push_cmd_buffer(list);
-                self.mgpu_shadow_mask.states[copy_texture] =
+                self.mgpu_csm.states[copy_texture] =
                     MgpuState::WaitForRead(self.primary_gpu.copy_queue.execute());
             }
         }
@@ -591,14 +535,14 @@ impl Application {
         info!("Primary Direction Light Pass");
         self.primary_gpu.gfx_queue.set_mark("Direction Light Pass");
         let (texture_mask, view_mask) =
-            if let MgpuState::WaitForRead(v) = self.mgpu_shadow_mask.states[copy_texture] {
+            if let MgpuState::WaitForRead(v) = self.mgpu_csm.states[copy_texture] {
                 if self.primary_gpu.copy_queue.is_complete(v) {
                     dbg!("Get copy texture");
-                    self.mgpu_shadow_mask.next_copy_texture();
-                    self.mgpu_shadow_mask.states[copy_texture] = MgpuState::WaitForWrite;
+                    self.mgpu_csm.next_copy_texture();
+                    self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
                     (
-                        &self.mgpu_shadow_mask.recv[copy_texture],
-                        &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                        &self.mgpu_csm.recv[copy_texture],
+                        &self.mgpu_csm.recv_srv[copy_texture],
                     )
                 } else {
                     let copy_texture = if copy_texture == 0 {
@@ -608,8 +552,8 @@ impl Application {
                     };
 
                     (
-                        &self.mgpu_shadow_mask.recv[copy_texture],
-                        &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                        &self.mgpu_csm.recv[copy_texture],
+                        &self.mgpu_csm.recv_srv[copy_texture],
                     )
                 }
             } else {
@@ -620,8 +564,8 @@ impl Application {
                 };
 
                 (
-                    &self.mgpu_shadow_mask.recv[copy_texture],
-                    &self.mgpu_shadow_mask.recv_srv[copy_texture],
+                    &self.mgpu_csm.recv[copy_texture],
+                    &self.mgpu_csm.recv_srv[copy_texture],
                 )
             };
 
@@ -631,9 +575,18 @@ impl Application {
             &self.primary_pso_cache,
             self.curr_frame,
             &self.p_gbuffer,
-            (texture_mask.local_resource(), view_mask),
+            (
+                texture_mask.local_resource(),
+                view_mask,
+                &self
+                    .mgpu_csm
+                    .gpu_csm_buffer
+                    .get_buffer(self.primary_gpu.id)
+                    .unwrap()
+                    .cbv[copy_texture],
+            ),
         );
-        self.primary_gpu.gfx_queue.end_mark();
+        self.primary_gpu.gfx_queue.end_event();
 
         info!("Primary Gamma Correction Pass");
         self.primary_gpu.gfx_queue.set_mark("Gamma Correction Pass");
@@ -643,7 +596,7 @@ impl Application {
             &self.p_gbuffer,
             &view,
         );
-        self.primary_gpu.gfx_queue.end_mark();
+        self.primary_gpu.gfx_queue.end_event();
 
         let list = self
             .primary_gpu
@@ -805,29 +758,12 @@ impl ApplicationHandler for Application {
                         &mut self.primary_pso_cache,
                     );
 
-                    self.s_zpass = ZPass::new(
-                        &self.secondary_gpu,
-                        size.width,
-                        size.height,
-                        &mut self.shader_cache,
-                        &mut self.secondary_pso_cache,
-                    );
-
                     self.p_gbuffer = GbufferPass::new(
                         size.width,
                         size.height,
                         &self.primary_gpu,
                         &mut self.shader_cache,
                         &mut self.primary_pso_cache,
-                    );
-
-                    self.mgpu_shadow_mask = MgpuShadowMaskPass::new(
-                        &self.primary_gpu,
-                        &self.secondary_gpu,
-                        size.width,
-                        size.height,
-                        &mut self.shader_cache,
-                        &mut self.secondary_pso_cache,
                     );
                 }
             }

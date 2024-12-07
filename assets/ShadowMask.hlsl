@@ -21,7 +21,7 @@ float4 Main(FullscreenVertex input) : SV_TARGET {
 
     float4 world_pos = screen_to_world(float4(tex_coord, depth, 1.0f), g_data.screen_dim, g_data.inv_proj_view);
 
-    float fragment_dist = length(g_data.eye_pos - world_pos.xyz);
+    float fragment_dist = mul(g_data.view, world_pos).z;
     uint cascade_idx = 0;
 
      for (uint i = 0; i < 4 - 1; ++i)

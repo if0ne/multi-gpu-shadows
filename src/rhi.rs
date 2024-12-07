@@ -604,10 +604,15 @@ impl CommandQueue {
 
     pub fn set_mark(&self, mark: impl AsRef<str>) {
         let mark = CString::new(mark.as_ref().as_bytes()).expect("Failed to create mark");
+        self.queue.lock().set_marker(0u64, &mark);
+    }
+
+    pub fn begin_event(&self, mark: impl AsRef<str>) {
+        let mark = CString::new(mark.as_ref().as_bytes()).expect("Failed to create mark");
         self.queue.lock().begin_event(0u64, &mark);
     }
 
-    pub fn end_mark(&self) {
+    pub fn end_event(&self) {
         self.queue.lock().end_event();
     }
 
@@ -882,6 +887,7 @@ impl SharedTexture {
         device: &Arc<Device>,
         width: u32,
         height: u32,
+        array: u32,
         format: dx::Format,
         flags: dx::ResourceFlags,
         local_state: dx::ResourceStates,
@@ -891,7 +897,7 @@ impl SharedTexture {
     ) -> Self {
         let desc = dx::ResourceDesc::texture_2d(width, height)
             .with_alignment(dx::HeapAlignment::ResourcePlacement)
-            .with_array_size(1)
+            .with_array_size(array as u16)
             .with_format(format)
             .with_mip_levels(1)
             .with_array_size(1)
@@ -914,8 +920,7 @@ impl SharedTexture {
 
         let size = device
             .gpu
-            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None)
-            * 2;
+            .get_copyable_footprints(&cross_desc, 0..array, 0, None, None, None);
         let heap = device
             .gpu
             .create_heap(
