@@ -408,6 +408,10 @@ impl Application {
         let copy_texture = self.mgpu_csm.copy_texture.load(Ordering::Acquire);
         let working_texture = self.mgpu_csm.working_texture.load(Ordering::Acquire);
 
+        dbg!(copy_texture);
+        dbg!(working_texture);
+        dbg!(&self.mgpu_csm.states);
+
         if self.secondary_gpu.gfx_queue.is_ready()
             && self.mgpu_csm.states[working_texture] == MgpuState::WaitForWrite
         {
@@ -443,8 +447,8 @@ impl Application {
                     }
                     rhi::SharedTextureState::Binded { cross, local } => {
                         list.set_device_texture_barriers(&[
-                            (&cross, dx::ResourceStates::Common),
-                            (&local, dx::ResourceStates::Common),
+                            (&cross, dx::ResourceStates::CopySource),
+                            (&local, dx::ResourceStates::CopyDest),
                         ]);
                         list.copy_texture_to_texture(&local, &cross);
                     }
@@ -540,8 +544,9 @@ impl Application {
                     self.mgpu_csm.next_copy_texture();
                     self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
                     (
-                        &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
-                        &self.mgpu_csm.recv_srv[copy_texture],
+                        &self.mgpu_csm.recv[(copy_texture * FRAMES_IN_FLIGHT)
+                            ..(copy_texture * FRAMES_IN_FLIGHT + 4)],
+                        &self.mgpu_csm.recv_srv[copy_texture * FRAMES_IN_FLIGHT],
                     )
                 } else {
                     let copy_texture = if copy_texture == 0 {
@@ -551,8 +556,9 @@ impl Application {
                     };
 
                     (
-                        &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
-                        &self.mgpu_csm.recv_srv[copy_texture],
+                        &self.mgpu_csm.recv[(copy_texture * FRAMES_IN_FLIGHT)
+                            ..(copy_texture * FRAMES_IN_FLIGHT + 4)],
+                        &self.mgpu_csm.recv_srv[copy_texture * FRAMES_IN_FLIGHT],
                     )
                 }
             } else {
@@ -563,8 +569,9 @@ impl Application {
                 };
 
                 (
-                    &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
-                    &self.mgpu_csm.recv_srv[copy_texture],
+                    &self.mgpu_csm.recv
+                        [(copy_texture * FRAMES_IN_FLIGHT)..(copy_texture * FRAMES_IN_FLIGHT + 4)],
+                    &self.mgpu_csm.recv_srv[copy_texture * FRAMES_IN_FLIGHT],
                 )
             };
 
