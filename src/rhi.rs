@@ -896,7 +896,6 @@ impl SharedTexture {
         device: &Arc<Device>,
         width: u32,
         height: u32,
-        array: u32,
         format: dx::Format,
         flags: dx::ResourceFlags,
         local_state: dx::ResourceStates,
@@ -906,10 +905,9 @@ impl SharedTexture {
     ) -> Self {
         let desc = dx::ResourceDesc::texture_2d(width, height)
             .with_alignment(dx::HeapAlignment::ResourcePlacement)
-            .with_array_size(array as u16)
+            .with_array_size(1)
             .with_format(format)
             .with_mip_levels(1)
-            .with_array_size(1)
             .with_layout(dx::TextureLayout::Unknown)
             .with_flags(flags);
 
@@ -948,7 +946,7 @@ impl SharedTexture {
             uuid: new_uuid(),
             width,
             height,
-            array,
+            array: 1,
             levels: 1,
             format,
             state: RefCell::new(state),
@@ -968,7 +966,7 @@ impl SharedTexture {
                 device,
                 width,
                 height,
-                array,
+                1,
                 format,
                 1,
                 desc.flags(),
@@ -1624,8 +1622,8 @@ impl PartialEq for CompiledShader {
 impl CompiledShader {
     pub fn compile(desc: ShaderDesc) -> Self {
         let target = match desc.ty {
-            ShaderType::Vertex => c"vs_5_0",
-            ShaderType::Pixel => c"ps_5_0",
+            ShaderType::Vertex => c"vs_5_1",
+            ShaderType::Pixel => c"ps_5_1",
         };
 
         let flags = if desc.debug {

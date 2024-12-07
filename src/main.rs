@@ -436,18 +436,20 @@ impl Application {
 
             info!("Try copy");
 
-            match &self.mgpu_csm.sender[working_texture].state {
-                rhi::SharedTextureState::CrossAdapter { .. } => {
-                    // noop
-                }
-                rhi::SharedTextureState::Binded { cross, local } => {
-                    list.set_device_texture_barriers(&[
-                        (&cross, dx::ResourceStates::Common),
-                        (&local, dx::ResourceStates::Common),
-                    ]);
-                    list.copy_texture_to_texture(&local, &cross);
-                }
-            };
+            for i in 0..4 {
+                match &self.mgpu_csm.sender[working_texture * FRAMES_IN_FLIGHT + i].state {
+                    rhi::SharedTextureState::CrossAdapter { .. } => {
+                        // noop
+                    }
+                    rhi::SharedTextureState::Binded { cross, local } => {
+                        list.set_device_texture_barriers(&[
+                            (&cross, dx::ResourceStates::Common),
+                            (&local, dx::ResourceStates::Common),
+                        ]);
+                        list.copy_texture_to_texture(&local, &cross);
+                    }
+                };
+            }
 
             info!("Copied");
 
@@ -459,11 +461,6 @@ impl Application {
                     .signal_shared(&self.mgpu_csm.sender_fence),
             );
         }
-
-        dbg!(working_texture);
-        dbg!(copy_texture);
-        dbg!(self.mgpu_csm.recv_fence.get_completed_value());
-        dbg!(self.mgpu_csm.states[copy_texture]);
 
         let list = self
             .primary_gpu
@@ -513,18 +510,20 @@ impl Application {
                     .copy_queue
                     .get_command_buffer(&self.primary_gpu);
 
-                match &self.mgpu_csm.recv[copy_texture].state {
-                    rhi::SharedTextureState::CrossAdapter { .. } => {
-                        // noop
-                    }
-                    rhi::SharedTextureState::Binded { cross, local } => {
-                        list.set_device_texture_barriers(&[
-                            (cross, dx::ResourceStates::CopySource),
-                            (local, dx::ResourceStates::CopyDest),
-                        ]);
-                        list.copy_texture_to_texture(local, cross);
-                    }
-                };
+                for i in 0..4 {
+                    match &self.mgpu_csm.recv[copy_texture * FRAMES_IN_FLIGHT + i].state {
+                        rhi::SharedTextureState::CrossAdapter { .. } => {
+                            // noop
+                        }
+                        rhi::SharedTextureState::Binded { cross, local } => {
+                            list.set_device_texture_barriers(&[
+                                (cross, dx::ResourceStates::CopySource),
+                                (local, dx::ResourceStates::CopyDest),
+                            ]);
+                            list.copy_texture_to_texture(local, cross);
+                        }
+                    };
+                }
 
                 self.primary_gpu.copy_queue.push_cmd_buffer(list);
                 self.mgpu_csm.states[copy_texture] =
@@ -541,7 +540,7 @@ impl Application {
                     self.mgpu_csm.next_copy_texture();
                     self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
                     (
-                        &self.mgpu_csm.recv[copy_texture],
+                        &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
                         &self.mgpu_csm.recv_srv[copy_texture],
                     )
                 } else {
@@ -552,7 +551,7 @@ impl Application {
                     };
 
                     (
-                        &self.mgpu_csm.recv[copy_texture],
+                        &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
                         &self.mgpu_csm.recv_srv[copy_texture],
                     )
                 }
@@ -564,10 +563,15 @@ impl Application {
                 };
 
                 (
-                    &self.mgpu_csm.recv[copy_texture],
+                    &self.mgpu_csm.recv[copy_texture..(copy_texture + 4)],
                     &self.mgpu_csm.recv_srv[copy_texture],
                 )
             };
+
+        let texture_mask = texture_mask
+            .iter()
+            .map(|t| t.local_resource())
+            .collect::<Vec<_>>();
 
         self.p_dir_light_pass.render(
             &self.primary_gpu,
@@ -576,7 +580,7 @@ impl Application {
             self.curr_frame,
             &self.p_gbuffer,
             (
-                texture_mask.local_resource(),
+                &texture_mask,
                 view_mask,
                 &self
                     .mgpu_csm

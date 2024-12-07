@@ -59,7 +59,6 @@ impl MgpuShadowMaskPass {
                 secondary_gpu,
                 width,
                 height,
-                1,
                 dx::Format::R8Unorm,
                 dx::ResourceFlags::AllowRenderTarget,
                 dx::ResourceStates::RenderTarget,

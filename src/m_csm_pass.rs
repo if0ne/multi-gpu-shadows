@@ -30,12 +30,12 @@ pub struct MgpuCascadedShadowMapsPass {
     pub gpu_csm_buffer: rhi::Buffer,
     pub gpu_csm_proj_view_buffer: rhi::DeviceBuffer,
 
-    pub sender: [rhi::SharedTexture; FRAMES_IN_FLIGHT],
+    pub sender: [rhi::SharedTexture; 4 * FRAMES_IN_FLIGHT],
     pub sender_dsvs: [rhi::DeviceTextureView; 4 * FRAMES_IN_FLIGHT],
     pub sender_fence: rhi::SharedFence,
 
-    pub recv: [rhi::SharedTexture; FRAMES_IN_FLIGHT],
-    pub recv_srv: [rhi::DeviceTextureView; FRAMES_IN_FLIGHT],
+    pub recv: [rhi::SharedTexture; 4 * FRAMES_IN_FLIGHT],
+    pub recv_srv: [rhi::DeviceTextureView; 4 * FRAMES_IN_FLIGHT],
     pub recv_fence: rhi::SharedFence,
 
     pub pso: rhi::PipelineHandle,
@@ -59,7 +59,6 @@ impl MgpuCascadedShadowMapsPass {
                 secondary_gpu,
                 size,
                 size,
-                4,
                 dx::Format::D32Float,
                 dx::ResourceFlags::AllowDepthStencil,
                 dx::ResourceStates::DepthWrite,
@@ -82,13 +81,12 @@ impl MgpuCascadedShadowMapsPass {
         );
 
         let sender_dsvs = std::array::from_fn(|idx| {
-            let i = (idx % (FRAMES_IN_FLIGHT + 1)) as u32;
-            rhi::DeviceTextureView::new_in_array(
+            rhi::DeviceTextureView::new(
                 secondary_gpu,
-                &sender[idx / 4].local_resource(),
+                &sender[idx].local_resource(),
                 dx::Format::D32Float,
                 rhi::TextureViewType::DepthTarget,
-                i..(i + 1),
+                None,
             )
         });
 
@@ -105,12 +103,12 @@ impl MgpuCascadedShadowMapsPass {
         });
 
         let recv_srv = std::array::from_fn(|i| {
-            rhi::DeviceTextureView::new_in_array(
+            rhi::DeviceTextureView::new(
                 &primary_gpu,
                 recv[i].local_resource(),
                 dx::Format::R32Float,
                 rhi::TextureViewType::ShaderResource,
-                0..4,
+                None,
             )
         });
 
@@ -144,7 +142,7 @@ impl MgpuCascadedShadowMapsPass {
                 line: false,
                 depth: Some(rhi::DepthDesc {
                     op: rhi::DepthOp::LessEqual,
-                    format: dx::Format::D16Unorm,
+                    format: dx::Format::D32Float,
                     read_only: false,
                 }),
                 wireframe: false,
@@ -300,13 +298,13 @@ impl MgpuCascadedShadowMapsPass {
         list.set_viewport(self.size, self.size);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
         list.set_topology(rhi::GeomTopology::Triangles);
-        list.set_device_texture_barrier(
-            self.sender[frame_idx].local_resource(),
-            dx::ResourceStates::DepthWrite,
-            None,
-        );
 
         for i in 0..4 {
+            list.set_device_texture_barrier(
+                self.sender[FRAMES_IN_FLIGHT * frame_idx + i].local_resource(),
+                dx::ResourceStates::DepthWrite,
+                None,
+            );
             list.clear_depth_target(&self.sender_dsvs[FRAMES_IN_FLIGHT * frame_idx + i]);
             list.set_render_targets(
                 &[],
