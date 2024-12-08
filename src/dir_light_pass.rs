@@ -71,7 +71,7 @@ impl DirectionalLightPass {
                     rhi::BindingEntry::Srv { num: 1, slot: 4 },
                     rhi::BindingEntry::Srv { num: 1, slot: 5 },
                     rhi::BindingEntry::Srv { num: 1, slot: 6 },
-                    rhi::BindingEntry::Srv { num: 4, slot: 7 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 7 },
                 ],
                 static_samplers: vec![rhi::StaticSampler {
                     slot: 0,
@@ -143,7 +143,7 @@ impl DirectionalLightPass {
         frame_idx: usize,
         gbuffer: &GbufferPass,
         csm: (
-            &[&rhi::DeviceTexture],
+            &rhi::DeviceTexture,
             &rhi::DeviceTextureView,
             &rhi::Descriptor,
         ),
@@ -153,17 +153,13 @@ impl DirectionalLightPass {
         list.set_viewport(gbuffer.width, gbuffer.height);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
         list.set_topology(rhi::GeomTopology::Triangles);
-        let mut barriers = vec![
+
+        list.set_device_texture_barriers(&[
             (&gbuffer.diffuse, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.normal, dx::ResourceStates::PixelShaderResource),
             (&gbuffer.material, dx::ResourceStates::PixelShaderResource),
-        ];
-
-        for csm in csm.0 {
-            barriers.push((*csm, dx::ResourceStates::PixelShaderResource));
-        }
-
-        list.set_device_texture_barriers(&barriers);
+            (csm.0, dx::ResourceStates::PixelShaderResource),
+        ]);
 
         list.clear_render_target(&gbuffer.accum_rtv, 0.0, 0.0, 0.0);
         list.set_render_targets(&[&gbuffer.accum_rtv], None);
@@ -179,12 +175,7 @@ impl DirectionalLightPass {
         list.set_graphics_srv(&csm.1, 7);
         list.draw(3);
 
-        let mut barriers = vec![];
-
-        for csm in csm.0 {
-            barriers.push((*csm, dx::ResourceStates::Common));
-        }
-        list.set_device_texture_barriers(&barriers);
+        list.set_device_texture_barriers(&[(csm.0, dx::ResourceStates::Common)]);
         device.gfx_queue.stash_cmd_buffer(list);
     }
 }

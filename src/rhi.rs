@@ -2600,6 +2600,20 @@ impl CommandBuffer {
         self.list.rs_set_scissor_rects(&[rect]);
     }
 
+    pub fn set_viewport_with_offset(&self, width: u32, height: u32, left: u32, top: u32) {
+        let viewport = dx::Viewport::from_position_and_size(
+            (left as f32, top as f32),
+            (width as f32, height as f32),
+        );
+        let rect = dx::Rect::default()
+            .with_size(((left + width) as i32, (top + height) as i32))
+            .with_left(left as i32)
+            .with_top(top as i32);
+
+        self.list.rs_set_viewports(&[viewport]);
+        self.list.rs_set_scissor_rects(&[rect]);
+    }
+
     pub fn set_topology(&self, topo: GeomTopology) {
         self.list.ia_set_primitive_topology(topo.as_dx());
     }

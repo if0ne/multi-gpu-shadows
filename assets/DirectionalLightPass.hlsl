@@ -25,7 +25,7 @@ cbuffer CsmBuffer : register(b3) {
 Texture2D diffuse_t : register(t4);
 Texture2D normal_t : register(t5);
 Texture2D material_t : register(t6);
-Texture2D csm_t[4] : register(t7);
+Texture2D csm_t : register(t7);
 
 SamplerComparisonState comp_shadow_s : register(s0);
 
@@ -63,7 +63,7 @@ float4 Main(FullscreenVertex input) : SV_Target {
         }
     }
 
-    float shadow_factor = sample_csm_array(csm_t, comp_shadow_s, mul(csm_data.proj_view[cascade_idx], world_pos), cascade_idx);
+    float shadow_factor = sample_csm_atlas(csm_t, comp_shadow_s, mul(csm_data.proj_view[cascade_idx], world_pos), cascade_idx);
 
     float3 to_eye = normalize(g_data.eye_pos - world_pos.xyz);
     float4 ambient = ambient_light.color * diffuse;

@@ -440,20 +440,18 @@ impl Application {
 
             info!("Try copy");
 
-            for i in 0..4 {
-                match &self.mgpu_csm.sender[working_texture * 4 + i].state {
-                    rhi::SharedTextureState::CrossAdapter { .. } => {
-                        // noop
-                    }
-                    rhi::SharedTextureState::Binded { cross, local } => {
-                        list.set_device_texture_barriers(&[
-                            (&cross, dx::ResourceStates::CopyDest),
-                            (&local, dx::ResourceStates::CopySource),
-                        ]);
-                        list.copy_texture_to_texture(cross, local);
-                    }
-                };
-            }
+            match &self.mgpu_csm.sender[working_texture].state {
+                rhi::SharedTextureState::CrossAdapter { .. } => {
+                    // noop
+                }
+                rhi::SharedTextureState::Binded { cross, local } => {
+                    list.set_device_texture_barriers(&[
+                        (&cross, dx::ResourceStates::CopyDest),
+                        (&local, dx::ResourceStates::CopySource),
+                    ]);
+                    list.copy_texture_to_texture(cross, local);
+                }
+            };
 
             info!("Copied");
 
@@ -514,20 +512,18 @@ impl Application {
                     .copy_queue
                     .get_command_buffer(&self.primary_gpu);
 
-                for i in 0..4 {
-                    match &self.mgpu_csm.recv[copy_texture * 4 + i].state {
-                        rhi::SharedTextureState::CrossAdapter { .. } => {
-                            // noop
-                        }
-                        rhi::SharedTextureState::Binded { cross, local } => {
-                            list.set_device_texture_barriers(&[
-                                (cross, dx::ResourceStates::CopySource),
-                                (local, dx::ResourceStates::CopyDest),
-                            ]);
-                            list.copy_texture_to_texture(local, cross);
-                        }
-                    };
-                }
+                match &self.mgpu_csm.recv[copy_texture].state {
+                    rhi::SharedTextureState::CrossAdapter { .. } => {
+                        // noop
+                    }
+                    rhi::SharedTextureState::Binded { cross, local } => {
+                        list.set_device_texture_barriers(&[
+                            (cross, dx::ResourceStates::CopySource),
+                            (local, dx::ResourceStates::CopyDest),
+                        ]);
+                        list.copy_texture_to_texture(local, cross);
+                    }
+                };
 
                 self.primary_gpu.copy_queue.push_cmd_buffer(list);
                 self.mgpu_csm.states[copy_texture] =
@@ -540,7 +536,6 @@ impl Application {
 
         let copy_texture = if let MgpuState::WaitForRead(v) = self.mgpu_csm.states[copy_texture] {
             if self.primary_gpu.copy_queue.is_complete(v) {
-                dbg!("Get copy texture");
                 self.mgpu_csm.next_copy_texture();
                 self.mgpu_csm.states[copy_texture] = MgpuState::WaitForWrite;
                 copy_texture
@@ -561,8 +556,8 @@ impl Application {
 
         let (texture_mask, view_mask, desc) = {
             (
-                &self.mgpu_csm.recv[(copy_texture * 4)..(copy_texture * 4 + 4)],
-                &self.mgpu_csm.recv_srv[copy_texture * 4],
+                &self.mgpu_csm.recv[copy_texture],
+                &self.mgpu_csm.recv_srv[copy_texture],
                 &self
                     .mgpu_csm
                     .gpu_csm_buffer
@@ -572,18 +567,13 @@ impl Application {
             )
         };
 
-        let texture_mask = texture_mask
-            .iter()
-            .map(|t| t.local_resource())
-            .collect::<Vec<_>>();
-
         self.p_dir_light_pass.render(
             &self.primary_gpu,
             &self.camera_buffers,
             &self.primary_pso_cache,
             self.curr_frame,
             &self.p_gbuffer,
-            (&texture_mask, view_mask, desc),
+            (texture_mask.local_resource(), view_mask, desc),
         );
         self.primary_gpu.gfx_queue.end_event();
 

@@ -8,7 +8,7 @@ use std::{
 };
 
 use glam::{vec4, Vec4Swizzles};
-use oxidx::dx::{self, IResource};
+use oxidx::dx;
 
 use crate::{
     camera::Camera,
@@ -16,7 +16,6 @@ use crate::{
     gltf::GpuMesh,
     m_shadow_mask_pass::MgpuState,
     rhi::{self, FRAMES_IN_FLIGHT},
-    GpuGlobals,
 };
 
 #[derive(Debug)]
@@ -30,12 +29,12 @@ pub struct MgpuCascadedShadowMapsPass {
     pub gpu_csm_buffer: rhi::Buffer,
     pub gpu_csm_proj_view_buffer: rhi::DeviceBuffer,
 
-    pub sender: [rhi::SharedTexture; 4 * FRAMES_IN_FLIGHT],
-    pub sender_dsvs: [rhi::DeviceTextureView; 4 * FRAMES_IN_FLIGHT],
+    pub sender: [rhi::SharedTexture; FRAMES_IN_FLIGHT],
+    pub sender_dsvs: [rhi::DeviceTextureView; FRAMES_IN_FLIGHT],
     pub sender_fence: rhi::SharedFence,
 
-    pub recv: [rhi::SharedTexture; 4 * FRAMES_IN_FLIGHT],
-    pub recv_srv: [rhi::DeviceTextureView; 4 * FRAMES_IN_FLIGHT],
+    pub recv: [rhi::SharedTexture; FRAMES_IN_FLIGHT],
+    pub recv_srv: [rhi::DeviceTextureView; FRAMES_IN_FLIGHT],
     pub recv_fence: rhi::SharedFence,
 
     pub pso: rhi::PipelineHandle,
@@ -57,8 +56,8 @@ impl MgpuCascadedShadowMapsPass {
         let sender = std::array::from_fn(|_| {
             rhi::SharedTexture::new(
                 secondary_gpu,
-                size,
-                size,
+                2 * size,
+                2 * size,
                 dx::Format::D32Float,
                 dx::ResourceFlags::AllowDepthStencil,
                 dx::ResourceStates::DepthWrite,
@@ -98,7 +97,7 @@ impl MgpuCascadedShadowMapsPass {
                 dx::ResourceStates::Common,
                 dx::ResourceStates::Common,
                 None,
-                format!("Primary CSM Cascade {} Frame {}", i % 4, i / 4),
+                format!("Primary CSM Cascade Frame {}", i),
             )
         });
 
@@ -293,19 +292,24 @@ impl MgpuCascadedShadowMapsPass {
         let frame_idx = self.working_texture.load(Ordering::Relaxed);
         let list = device.gfx_queue.get_command_buffer(&device);
 
-        list.set_viewport(self.size, self.size);
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
+        list.set_device_texture_barrier(
+            self.sender[frame_idx].local_resource(),
+            dx::ResourceStates::DepthWrite,
+            None,
+        );
         list.set_topology(rhi::GeomTopology::Triangles);
+        list.clear_depth_target(&self.sender_dsvs[frame_idx]);
+        list.set_render_targets(&[], Some(&self.sender_dsvs[frame_idx]));
 
         for i in 0..4 {
-            list.set_device_texture_barrier(
-                self.sender[4 * frame_idx + i].local_resource(),
-                dx::ResourceStates::DepthWrite,
-                None,
+            let row = i / 2;
+            let col = i % 2;
+            list.set_viewport_with_offset(self.size, self.size, self.size * col, self.size * row);
+            list.set_graphics_cbv(
+                &self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i as usize],
+                0,
             );
-            list.clear_depth_target(&self.sender_dsvs[4 * frame_idx + i]);
-            list.set_render_targets(&[], Some(&self.sender_dsvs[4 * frame_idx + i]));
-            list.set_graphics_cbv(&self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i], 0);
 
             list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
             list.set_index_buffer(&gpu_mesh.ib);
