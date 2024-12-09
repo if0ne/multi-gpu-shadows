@@ -267,7 +267,7 @@ impl CascadedShadowMapsPass {
             let row = i / 2;
             let col = i % 2;
             list.set_viewport_with_offset(self.size, self.size, self.size * col, self.size * row);
-            
+
             list.set_graphics_cbv(
                 &self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i as usize],
                 0,
