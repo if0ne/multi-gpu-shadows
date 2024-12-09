@@ -514,7 +514,7 @@ impl TexturePlaceholders {
 
 impl Application {
     pub fn new(width: u32, height: u32) -> Self {
-        let mut device_manager = rhi::DeviceManager::new(true);
+        let mut device_manager = rhi::DeviceManager::new(false);
         let primary_gpu = device_manager
             .get_high_perf_device()
             .expect("Failed to fetch high perf gpu");

@@ -51,8 +51,8 @@ impl CascadedShadowMapsPass {
     ) -> Self {
         let texture = rhi::DeviceTexture::new(
             device,
-            size,
-            size,
+            2 * size,
+            2 * size,
             1,
             dx::Format::D32Float,
             1,
@@ -242,7 +242,7 @@ impl CascadedShadowMapsPass {
             .enumerate()
             .for_each(|(i, pv)| {
                 self.gpu_csm_proj_view_buffer.write(
-                    i * FRAMES_IN_FLIGHT + frame_index,
+                    4 * frame_index + i,
                     GpuCSMProjView { proj_vies: *pv },
                 );
             });
