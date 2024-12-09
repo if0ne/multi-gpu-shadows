@@ -822,6 +822,8 @@ impl ApplicationHandler for Application {
                 winit::event::ElementState::Pressed => {
                     if event.physical_key == KeyCode::Escape {
                         event_loop.exit();
+                    } else if event.physical_key == KeyCode::KeyI {
+                        self.is_single = !self.is_single;
                     }
                     self.keys.insert(event.physical_key, true);
                 }
