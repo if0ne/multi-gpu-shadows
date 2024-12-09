@@ -35,7 +35,7 @@ pub struct CascadedShadowMapsPass {
     pub gpu_csm_buffer: rhi::DeviceBuffer,
     pub gpu_csm_proj_view_buffer: rhi::DeviceBuffer,
     pub texture: rhi::DeviceTexture,
-    pub dsvs: [rhi::DeviceTextureView; 4],
+    pub dsv: rhi::DeviceTextureView,
     pub srv: rhi::DeviceTextureView,
 
     pub pso: rhi::PipelineHandle,
@@ -53,7 +53,7 @@ impl CascadedShadowMapsPass {
             device,
             size,
             size,
-            4,
+            1,
             dx::Format::D32Float,
             1,
             dx::ResourceFlags::AllowDepthStencil,
@@ -71,23 +71,20 @@ impl CascadedShadowMapsPass {
             "CSM Proj View Buffer",
         );
 
-        let dsvs = std::array::from_fn(|i| {
-            let i = i as u32;
-            rhi::DeviceTextureView::new_in_array(
-                device,
-                &texture,
-                dx::Format::D32Float,
-                rhi::TextureViewType::DepthTarget,
-                i..(i + 1),
-            )
-        });
+        let dsv = rhi::DeviceTextureView::new(
+            device,
+            &texture,
+            dx::Format::D32Float,
+            rhi::TextureViewType::DepthTarget,
+            None,
+        );
 
-        let srv = rhi::DeviceTextureView::new_in_array(
+        let srv = rhi::DeviceTextureView::new(
             device,
             &texture,
             dx::Format::R32Float,
             rhi::TextureViewType::ShaderResource,
-            0..4,
+            None,
         );
 
         let rs = Rc::new(rhi::RootSignature::new(
@@ -140,7 +137,7 @@ impl CascadedShadowMapsPass {
             gpu_csm_buffer,
             gpu_csm_proj_view_buffer,
             texture,
-            dsvs,
+            dsv,
             srv,
             pso,
         }
@@ -264,12 +261,15 @@ impl CascadedShadowMapsPass {
         list.set_graphics_pipeline(pso_cache.get_pso(&self.pso));
         list.set_topology(rhi::GeomTopology::Triangles);
         list.set_device_texture_barrier(&self.texture, dx::ResourceStates::DepthWrite, None);
-
+        list.clear_depth_target(&self.dsv);
+        list.set_render_targets(&[], Some(&self.dsv));
         for i in 0..4 {
-            list.clear_depth_target(&self.dsvs[i]);
-            list.set_render_targets(&[], Some(&self.dsvs[i]));
+            let row = i / 2;
+            let col = i % 2;
+            list.set_viewport_with_offset(self.size, self.size, self.size * col, self.size * row);
+            
             list.set_graphics_cbv(
-                &self.gpu_csm_proj_view_buffer.cbv[i * FRAMES_IN_FLIGHT + frame_idx],
+                &self.gpu_csm_proj_view_buffer.cbv[4 * frame_idx + i as usize],
                 0,
             );
 
