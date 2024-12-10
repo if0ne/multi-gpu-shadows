@@ -19,6 +19,7 @@ use oxidx::dx::{
     IGraphicsCommandListExt, IResource, ISwapchain1, PSO_NONE, RES_NONE,
 };
 use parking_lot::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::utils::new_uuid;
 
@@ -63,8 +64,12 @@ impl DeviceManager {
 
             debug.enable_debug_layer();
             debug.set_enable_gpu_based_validation(true);
-            debug.set_callback(Box::new(|_, _, _, msg| {
-                println!("[d3d12] {}", msg);
+            debug.set_callback(Box::new(|_, severity, _, msg| match severity {
+                dx::MessageSeverity::Corruption => error!("[D3D12 Validation] {}", msg),
+                dx::MessageSeverity::Error => error!("[D3D12 Validation] {}", msg),
+                dx::MessageSeverity::Warning => warn!("[D3D12 Validation] {}", msg),
+                dx::MessageSeverity::Info => info!("[D3D12 Validation] {}", msg),
+                dx::MessageSeverity::Message => debug!("[D3D12 Validation] {}", msg),
             }));
 
             Some(debug)
@@ -76,6 +81,8 @@ impl DeviceManager {
         let mut gpus = vec![];
 
         if let Ok(factory) = TryInto::<dx::Factory7>::try_into(factory.clone()) {
+            debug!("Factory7 is supported");
+
             let mut i = 0;
 
             while let Ok(adapter) =
@@ -90,6 +97,8 @@ impl DeviceManager {
                     i += 1;
                     continue;
                 }
+
+                info!("Found adapter: {}", desc.description());
 
                 if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
                     gpus.push(adapter);
@@ -109,6 +118,8 @@ impl DeviceManager {
                     i += 1;
                     continue;
                 }
+
+                info!("Found adapter: {}", desc.description());
 
                 if dx::create_device(Some(&adapter), dx::FeatureLevel::Level11).is_ok() {
                     gpus.push(adapter);
@@ -214,6 +225,12 @@ pub struct Device {
 
 impl Device {
     pub(crate) fn new(adapter: dx::Adapter3, id: DeviceMask) -> Self {
+        info!(
+            "Creating device with adapter {} and id {:?}",
+            adapter.get_desc1().unwrap().description(),
+            id
+        );
+
         let device = dx::create_device(Some(&adapter), dx::FeatureLevel::Level11)
             .expect("Failed to create device");
 
@@ -230,6 +247,12 @@ impl Device {
         device
             .check_feature_support(&mut feature)
             .expect("Failed to fetch options feature");
+
+        if feature.cross_adapter_row_major_texture_supported() {
+            info!("Cross Adapter Row Major Texture is supported");
+        } else {
+            info!("Cross Adapter Row Major Texture is NOT supported");
+        }
 
         Self {
             id,
@@ -248,7 +271,7 @@ impl Device {
         }
     }
 
-    pub fn create_resource(
+    pub(crate) fn create_resource(
         &self,
         desc: &dx::ResourceDesc,
         heap_props: &dx::HeapProperties,
@@ -281,7 +304,7 @@ impl Device {
         }
     }
 
-    pub fn create_placed_resource(
+    pub(crate) fn create_placed_resource(
         &self,
         desc: &dx::ResourceDesc,
         heap: &dx::Heap,
@@ -366,6 +389,8 @@ impl DescriptorHeap {
         let mut descriptors = self.descriptors.lock();
 
         let index = descriptors.zeroes().next().expect("Out of memory");
+
+        debug!("Allocating descriptor {} in {:?}", index, self.ty);
 
         descriptors.set(index, true);
 
@@ -529,26 +554,24 @@ impl SharedFence {
                 panic!("Device lost")
             }
         }
-    }
-}
 
-impl SharedFence {
-    pub fn connect(&self, device: &Arc<Device>) -> Self {
-        let handle = self
-            .owner
-            .gpu
-            .create_shared_handle(&self.fence, None)
-            .expect("Failed to create shared handle");
-        let fence = device
-            .gpu
-            .open_shared_handle(handle)
-            .expect("Failed to open shared handle");
-        handle.close().unwrap();
+        pub fn connect(&self, device: &Arc<Device>) -> Self {
+            let handle = self
+                .owner
+                .gpu
+                .create_shared_handle(&self.fence, None)
+                .expect("Failed to create shared handle");
+            let fence = device
+                .gpu
+                .open_shared_handle(handle)
+                .expect("Failed to open shared handle");
+            handle.close().unwrap();
 
-        Self {
-            owner: Arc::clone(device),
-            fence,
-            value: Arc::clone(&self.value),
+            Self {
+                owner: Arc::clone(device),
+                fence,
+                value: Arc::clone(&self.value),
+            }
         }
     }
 }
@@ -659,10 +682,12 @@ impl CommandQueue {
     }
 
     pub fn stash_cmd_buffer(&self, cmd_buffer: CommandBuffer) {
+        debug!("Stashing cmd buffer");
         self.in_record.lock().push(cmd_buffer);
     }
 
     pub fn push_cmd_buffer(&self, cmd_buffer: CommandBuffer) {
+        debug!("Pushing cmd buffer");
         cmd_buffer.list.close().expect("Failed to close list");
         self.pending.lock().push(cmd_buffer);
     }
@@ -692,7 +717,10 @@ impl CommandQueue {
     }
 
     pub fn get_command_buffer(&self, device: &Device) -> CommandBuffer {
+        debug!("Fetching cmd buffer");
+
         if let Some(buffer) = self.in_record.lock().pop() {
+            debug!("Returned cmd buffer from stash");
             return buffer;
         };
 
@@ -708,8 +736,13 @@ impl CommandQueue {
                 .raw
                 .reset()
                 .expect("Failed to reset command allocator");
+
+            debug!("Returned cmd buffer from pool");
+
             allocator
         } else {
+            debug!("Returned new cmd buffer");
+
             CommandAllocatorEntry {
                 raw: device
                     .gpu
@@ -808,6 +841,19 @@ impl DeviceTexture {
     ) -> Self {
         let name = name.as_ref().to_string();
         let uuid = new_uuid();
+
+        info!(
+            "Creating texture for {:?}, width: {}, height: {}, array: {}, format: {:?}, levels: {}, flags: {:?}, state: {:?}", 
+            device.id, 
+            width, 
+            height, 
+            array, 
+            format, 
+            levels, 
+            flags, 
+            state
+        );
+
         let desc = dx::ResourceDesc::texture_2d(width, height)
             .with_alignment(dx::HeapAlignment::ResourcePlacement)
             .with_format(format)
@@ -924,11 +970,13 @@ impl SharedTexture {
         let (flags, state) = if device.is_cross_adapter_texture_supported
             && !flags.contains(dx::ResourceFlags::AllowDepthStencil)
         {
+            info!("Creating cross-adapter texture");
             (
                 dx::ResourceFlags::AllowCrossAdapter | desc.flags(),
                 local_state,
             )
         } else {
+            info!("Creating binded texture");
             (dx::ResourceFlags::AllowCrossAdapter, shared_state)
         };
 
@@ -940,6 +988,18 @@ impl SharedTexture {
         let size = device
             .gpu
             .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None);
+
+        info!(
+            "Shared texture texture for {:?}, width: {}, height: {}, format: {:?}, flags: {:?}, state: {:?}, size: {} bytes", 
+            device.id, 
+            width, 
+            height, 
+            format, 
+            flags, 
+            state,
+            size
+        );
+
         let heap = device
             .gpu
             .create_heap(
@@ -1039,13 +1099,25 @@ impl SharedTexture {
         handle.close().unwrap();
 
         let (flags, state) = if other.is_cross_adapter_texture_supported {
+            info!("Connecting cross-adapter texture");
             (
                 dx::ResourceFlags::AllowCrossAdapter | self.desc.flags(),
                 local_state,
             )
         } else {
+            info!("Connecting binded texture");
             (dx::ResourceFlags::AllowCrossAdapter, share_state)
         };
+
+        info!(
+            "Shared texture texture for {:?}, width: {}, height: {}, format: {:?}, flags: {:?}, state: {:?}", 
+            other.id, 
+            self.desc.width(),
+            self.desc.height(),
+            self.desc.format(),
+            flags, 
+            state,
+        );
 
         let cross_res = other.create_placed_resource(
             &self.cross_resource().res.res.get_desc().with_flags(flags),
@@ -1187,6 +1259,10 @@ impl DeviceTextureView {
         ty: TextureViewType,
         mip: Option<u32>,
     ) -> Self {
+        info!(
+            "Creating texture view for {:?}, format: {:?}, ty: {:?}, mip: {:?}",
+            parent.res.name, format, ty, mip
+        );
         let handle = match ty {
             TextureViewType::RenderTarget => {
                 let handle = device.rtv_heap.alloc(device);
@@ -1251,6 +1327,11 @@ impl DeviceTextureView {
         ty: TextureViewType,
         range: Range<u32>,
     ) -> Self {
+        info!(
+            "Creating texture view array for {:?}, format: {:?}, ty: {:?}, range: {:?}",
+            parent.res.name, format, ty, range
+        );
+
         let handle = match ty {
             TextureViewType::RenderTarget => {
                 let handle = device.rtv_heap.alloc(device);
@@ -1489,6 +1570,8 @@ impl PartialEq for RootSignature {
 
 impl RootSignature {
     pub fn new(device: &Device, desc: RootSignatureDesc) -> Self {
+        info!("Creating root signature: {:?}", desc);
+
         let mut parameters = vec![];
         let mut ranges = vec![];
 
@@ -1631,6 +1714,8 @@ impl PartialEq for CompiledShader {
 
 impl CompiledShader {
     pub fn compile(desc: ShaderDesc) -> Self {
+        info!("Compiling shader: {:?}", desc);
+
         let target = match desc.ty {
             ShaderType::Vertex => c"vs_5_1",
             ShaderType::Pixel => c"ps_5_1",
@@ -1815,6 +1900,8 @@ pub struct RasterPipeline {
 
 impl RasterPipeline {
     pub fn new(device: &Device, desc: &RasterPipelineDesc, cache: &ShaderCache) -> Self {
+        info!("Creating Raster Pipeline for {:?}: {:?}", device.id, desc);
+
         let vert = cache.get_shader(&desc.vs);
 
         let input_element_desc = desc
@@ -2097,6 +2184,16 @@ impl DeviceBuffer {
         name: &str,
         inner_ty: TypeId,
     ) -> Self {
+        info!("Creating device buffer for {:?}, size: {}, stride: {}, ty: {:?}, readback: {}, name: {}, inner_ty: {:?}", 
+            device.id, 
+            size, 
+            stride, 
+            ty, 
+            readback, 
+            name, 
+            inner_ty
+        );
+
         let heap_props = match ty {
             BufferType::Constant | BufferType::Copy => {
                 if readback {
@@ -2394,6 +2491,11 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new(device: &Arc<Device>, address: SamplerAddress, filter: SamplerFilter) -> Self {
+        info!(
+            "Creating sampler for {:?}, address: {:?}, filter: {:?}",
+            device.id, address, filter
+        );
+
         let handle = device.sampler_heap.alloc(device);
 
         let desc = dx::SamplerDesc::new(filter.as_dx())

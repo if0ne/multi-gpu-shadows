@@ -6,6 +6,7 @@ use std::{path::Path, sync::Arc};
 
 use glam::{Mat4, Vec3, Vec4};
 use oxidx::dx;
+use tracing::{debug, info};
 
 #[derive(Clone, Debug)]
 pub enum ImageSource {
@@ -59,6 +60,9 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
 
 impl Mesh {
     pub fn load(path: impl AsRef<Path>) -> Self {
+        let curr_dir = std::env::current_dir().expect("Failed to get current dir");
+
+        info!("Loading mesh: {:?}", path.as_ref());
         let (gltf, buffers, _) = gltf::import(&path).expect("Failed to open file");
 
         let scene = gltf
@@ -77,6 +81,7 @@ impl Mesh {
                     ImageSource::Data(buffer_data[start..end].to_vec())
                 }
                 gltf::image::Source::Uri { uri, .. } => {
+                    info!("Find texture by path: {:?}\\{}", curr_dir, uri);
                     let path = path
                         .as_ref()
                         .parent()
@@ -100,6 +105,8 @@ impl Mesh {
                 normal_map: m.normal_texture().map(|m| m.texture().index()),
             })
             .collect();
+
+        info!("Fetched materials: {:?}", res.materials);
 
         let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
             if let Some(mesh) = node.mesh() {
@@ -160,6 +167,7 @@ impl Mesh {
                     }
 
                     if !tangents_found && uvs_found {
+                        debug!("Generating tangtents");
                         mikktspace::generate_tangents(&mut TangentCalcContext {
                             indices: indices.as_slice(),
                             positions: positions.as_slice(),
@@ -277,6 +285,8 @@ pub struct GpuMesh {
 
 impl GpuMesh {
     pub fn new(builder: GpuMeshBuilder<'_>) -> Self {
+        info!("Creating GPU Mesh: {:?}", builder);
+
         let all_executors = builder
             .devices
             .iter()
