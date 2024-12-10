@@ -446,7 +446,7 @@ impl LocalFence {
         }
     }
 
-    pub fn wait(&self, value: u64) {
+    pub fn wait(&self, value: u64) -> bool {
         if self.get_completed_value() < value {
             let event = dx::Event::create(false, false).expect("Failed to create event");
             self.fence
@@ -455,6 +455,10 @@ impl LocalFence {
             if event.wait(10_000_000) == 0x00000102 {
                 panic!("Device lost")
             }
+
+            true
+        } else {
+            false
         }
     }
 
@@ -569,6 +573,7 @@ pub struct CommandQueue {
     pending: Mutex<Vec<CommandBuffer>>,
 
     pub frequency: f64,
+    pub timestamp_query: Mutex<Option<TimestampQueryHeap>>,
 }
 
 impl CommandQueue {
@@ -608,7 +613,12 @@ impl CommandQueue {
             cmd_lists: Mutex::new(vec![cmd_list]),
             in_record: Default::default(),
             pending: Default::default(),
+            timestamp_query: Mutex::new(None),
         }
+    }
+
+    pub fn init_timestamp_query(&self, device: &Device, count: usize) {
+        *self.timestamp_query.lock() = Some(TimestampQueryHeap::new(device, self.ty, count));
     }
 
     pub fn set_mark(&self, mark: impl AsRef<str>) {
@@ -639,8 +649,8 @@ impl CommandQueue {
             .expect("Failed to queue wait");
     }
 
-    pub fn wait_on_cpu(&self, value: u64) {
-        self.fence.wait(value);
+    pub fn wait_on_cpu(&self, value: u64) -> bool {
+        self.fence.wait(value)
     }
 
     pub fn wait_idle(&self) {
@@ -724,7 +734,7 @@ impl CommandQueue {
 
         CommandBuffer {
             device_id: device.id,
-            _ty: self.ty,
+            ty: self.ty,
             list,
             allocator,
         }
@@ -2088,7 +2098,13 @@ impl DeviceBuffer {
         inner_ty: TypeId,
     ) -> Self {
         let heap_props = match ty {
-            BufferType::Constant | BufferType::Copy => dx::HeapProperties::upload(),
+            BufferType::Constant | BufferType::Copy => {
+                if readback {
+                    dx::HeapProperties::readback()
+                } else {
+                    dx::HeapProperties::upload()
+                }
+            }
             _ => {
                 if readback {
                     dx::HeapProperties::readback()
@@ -2410,7 +2426,7 @@ impl GeomTopology {
 #[derive(Debug)]
 pub struct CommandBuffer {
     pub(crate) device_id: DeviceMask,
-    pub(crate) _ty: dx::CommandListType,
+    pub(crate) ty: dx::CommandListType,
     pub(crate) list: dx::GraphicsCommandList,
     pub(crate) allocator: CommandAllocatorEntry,
 }
@@ -2421,6 +2437,28 @@ impl CommandBuffer {
             Some(device.shader_heap.heap.clone()),
             Some(device.sampler_heap.heap.clone()),
         ]);
+    }
+
+    pub fn start_timestamp(&self, timestamp: &TimestampQueryHeap, idx: usize) {
+        self.list
+            .end_query(&timestamp.raw, dx::QueryType::Timestamp, idx);
+    }
+
+    pub fn end_timestamp(&self, timestamp: &TimestampQueryHeap, idx: usize) {
+        self.list
+            .end_query(&timestamp.raw, dx::QueryType::Timestamp, idx);
+    }
+
+    pub fn resolve_timestamp(&self, timestamp: &TimestampQueryHeap, range: Option<Range<usize>>) {
+        let range = range.unwrap_or(0..timestamp.count);
+        self.list.resolve_query_data(
+            &timestamp.raw,
+            dx::QueryType::Timestamp,
+            range.start,
+            range.end - range.start,
+            &timestamp.resolve_buffer.res.res,
+            0,
+        );
     }
 
     pub fn set_mark(&self, mark: impl AsRef<str>) {
@@ -2667,5 +2705,51 @@ impl CommandBuffer {
         ) {
             self.list.copy_resource(&dst.res.res, &src.res.res);
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct TimestampQueryHeap {
+    pub raw: dx::QueryHeap,
+    pub count: usize,
+    pub resolve_buffer: DeviceBuffer,
+}
+
+impl TimestampQueryHeap {
+    pub fn new(device: &Device, queue_ty: dx::CommandListType, count: usize) -> Self {
+        let raw = if queue_ty == dx::CommandListType::Copy {
+            device
+                .gpu
+                .create_query_heap(&dx::QueryHeapDesc::copy_queue_timestamp(count))
+                .expect("Failed to create timestamp query")
+        } else {
+            device
+                .gpu
+                .create_query_heap(&dx::QueryHeapDesc::timestamp(count))
+                .expect("Failed to create timestamp query")
+        };
+
+        let resolve_buffer = DeviceBuffer::new(
+            device,
+            count * size_of::<u64>(),
+            0,
+            BufferType::Storage,
+            true,
+            "Resolve Buffer",
+            TypeId::of::<u64>(),
+        );
+
+        Self {
+            raw,
+            count,
+            resolve_buffer,
+        }
+    }
+
+    pub fn read(&mut self, range: Option<Range<usize>>, dst: &mut [u64]) {
+        let range = range.unwrap_or(0..(self.count));
+        let map = self.resolve_buffer.map::<u64>();
+
+        dst.clone_from_slice(&map.pointer[range]);
     }
 }

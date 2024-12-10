@@ -18,7 +18,7 @@ use std::{
     collections::HashMap,
     num::NonZero,
     sync::{atomic::Ordering, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use camera::{Camera, FpsController};
@@ -106,6 +106,18 @@ impl RenderContext {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub struct FrameStats {
+    pub frame_idx: usize,
+    pub primary_gfx: f32,
+    pub primary_copy: f32,
+    pub secondary_gfx: f32,
+
+    pub primary_cmd_gfx: f32,
+    pub primary_cmd_copy: f32,
+    pub secondary_cmd_gfx: f32,
+}
+
 pub struct Application {
     pub device_manager: rhi::DeviceManager,
     pub shader_cache: rhi::ShaderCache,
@@ -120,6 +132,7 @@ pub struct Application {
     pub keys: HashMap<PhysicalKey, bool>,
 
     pub camera_buffers: rhi::DeviceBuffer,
+    pub frame_num: usize,
     pub curr_frame: usize,
 
     pub wnd_ctx: Option<WindowContext>,
@@ -140,6 +153,8 @@ pub struct Application {
     pub mgpu_shadow_mask: MgpuShadowMaskContext,
 
     pub curr_context: RenderContext,
+
+    pub stats: Vec<FrameStats>,
 }
 
 pub struct SingleGpuContext {
@@ -188,7 +203,9 @@ impl SingleGpuContext {
         gpu_mesh: &GpuMesh,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
+        frame_stats: &mut FrameStats,
     ) {
+        let timer = Instant::now();
         self.csm
             .render(&primary_gpu, &gpu_mesh, &primary_pso_cache, curr_frame);
 
@@ -229,6 +246,8 @@ impl SingleGpuContext {
             &self.p_gbuffer,
             swapchain_view,
         );
+
+        frame_stats.primary_gfx = timer.elapsed().as_secs_f32();
     }
 }
 
@@ -289,6 +308,7 @@ impl MgpuCsmContext {
         gpu_mesh: &GpuMesh,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
+        frame_stats: &mut FrameStats,
     ) {
         let copy_texture = self.mgpu_csm.copy_texture.load(Ordering::Acquire);
         let working_texture = self.mgpu_csm.working_texture.load(Ordering::Acquire);
@@ -300,7 +320,19 @@ impl MgpuCsmContext {
 
             let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
 
+            let timer = Instant::now();
             list.begin(&secondary_gpu);
+
+            if let Some(query) = &mut *secondary_gpu.gfx_queue.timestamp_query.lock() {
+                let mut resolve = [0u64; 2];
+                query.read(Some(0..2), &mut resolve);
+
+                frame_stats.secondary_gfx =
+                    (resolve[1] - resolve[0]) as f32 / secondary_gpu.gfx_queue.frequency as f32;
+
+                list.start_timestamp(&query, 0);
+            }
+
             secondary_gpu.gfx_queue.stash_cmd_buffer(list);
 
             self.mgpu_csm
@@ -321,6 +353,12 @@ impl MgpuCsmContext {
                 }
             };
 
+            if let Some(query) = &mut *secondary_gpu.gfx_queue.timestamp_query.lock() {
+                list.end_timestamp(&query, 1);
+                list.resolve_timestamp(&query, Some(0..2));
+            }
+            frame_stats.secondary_cmd_gfx = timer.elapsed().as_secs_f32();
+
             secondary_gpu.gfx_queue.push_cmd_buffer(list);
             secondary_gpu.gfx_queue.execute();
             self.mgpu_csm.states[working_texture] = MgpuState::WaitForCopy(
@@ -338,6 +376,17 @@ impl MgpuCsmContext {
 
                 let list = primary_gpu.copy_queue.get_command_buffer(&primary_gpu);
 
+                let timer = Instant::now();
+                if let Some(query) = &mut *primary_gpu.copy_queue.timestamp_query.lock() {
+                    let mut resolve = [0u64; 2];
+                    query.read(Some(0..2), &mut resolve);
+
+                    frame_stats.primary_copy =
+                        (resolve[1] - resolve[0]) as f32 / primary_gpu.copy_queue.frequency as f32;
+
+                    list.start_timestamp(&query, 0);
+                }
+
                 match &self.mgpu_csm.recv[copy_texture].state {
                     rhi::SharedTextureState::CrossAdapter { .. } => {
                         // noop
@@ -351,11 +400,20 @@ impl MgpuCsmContext {
                     }
                 };
 
+                if let Some(query) = &mut *primary_gpu.copy_queue.timestamp_query.lock() {
+                    list.end_timestamp(&query, 1);
+                    list.resolve_timestamp(&query, Some(0..2));
+                }
+
+                frame_stats.primary_cmd_copy = timer.elapsed().as_secs_f32();
+
                 primary_gpu.copy_queue.push_cmd_buffer(list);
                 self.mgpu_csm.states[copy_texture] =
                     MgpuState::WaitForRead(primary_gpu.copy_queue.execute());
             }
         }
+
+        let timer = Instant::now();
 
         self.p_zpass.render(
             &primary_gpu,
@@ -423,6 +481,7 @@ impl MgpuCsmContext {
             &self.p_gbuffer,
             swapchain_view,
         );
+        frame_stats.primary_cmd_gfx = timer.elapsed().as_secs_f32();
     }
 }
 
@@ -502,6 +561,7 @@ impl MgpuShadowMaskContext {
         gpu_mesh: &GpuMesh,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
+        frame_stats: &mut FrameStats,
     ) {
         let copy_texture = self.mgpu_mask.copy_texture.load(Ordering::Acquire);
         let working_texture = self.mgpu_mask.working_texture.load(Ordering::Acquire);
@@ -514,7 +574,19 @@ impl MgpuShadowMaskContext {
 
             let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
 
+            let timer = Instant::now();
             list.begin(&secondary_gpu);
+
+            if let Some(query) = &mut *secondary_gpu.gfx_queue.timestamp_query.lock() {
+                let mut resolve = [0u64; 2];
+                query.read(Some(0..2), &mut resolve);
+
+                frame_stats.secondary_gfx =
+                    (resolve[1] - resolve[0]) as f32 / secondary_gpu.gfx_queue.frequency as f32;
+
+                list.start_timestamp(&query, 0);
+            }
+
             secondary_gpu.gfx_queue.stash_cmd_buffer(list);
 
             self.s_zpass.render(
@@ -550,6 +622,12 @@ impl MgpuShadowMaskContext {
                 }
             };
 
+            if let Some(query) = &mut *secondary_gpu.gfx_queue.timestamp_query.lock() {
+                list.end_timestamp(&query, 1);
+                list.resolve_timestamp(&query, Some(0..2));
+            }
+            frame_stats.secondary_cmd_gfx = timer.elapsed().as_secs_f32();
+
             secondary_gpu.gfx_queue.push_cmd_buffer(list);
             secondary_gpu.gfx_queue.execute();
             self.mgpu_mask.states[working_texture] = MgpuState::WaitForCopy(
@@ -567,6 +645,17 @@ impl MgpuShadowMaskContext {
 
                 let list = primary_gpu.copy_queue.get_command_buffer(&primary_gpu);
 
+                let timer = Instant::now();
+                if let Some(query) = &mut *primary_gpu.copy_queue.timestamp_query.lock() {
+                    let mut resolve = [0u64; 2];
+                    query.read(Some(0..2), &mut resolve);
+
+                    frame_stats.primary_copy =
+                        (resolve[1] - resolve[0]) as f32 / primary_gpu.copy_queue.frequency as f32;
+
+                    list.start_timestamp(&query, 0);
+                }
+
                 match &self.mgpu_mask.recv[copy_texture].state {
                     rhi::SharedTextureState::CrossAdapter { .. } => {
                         // noop
@@ -580,12 +669,20 @@ impl MgpuShadowMaskContext {
                     }
                 };
 
+                if let Some(query) = &mut *primary_gpu.copy_queue.timestamp_query.lock() {
+                    list.end_timestamp(&query, 1);
+                    list.resolve_timestamp(&query, Some(0..2));
+                }
+
+                frame_stats.primary_cmd_copy = timer.elapsed().as_secs_f32();
+
                 primary_gpu.copy_queue.push_cmd_buffer(list);
                 self.mgpu_mask.states[copy_texture] =
                     MgpuState::WaitForRead(primary_gpu.copy_queue.execute());
             }
         }
 
+        let timer = Instant::now();
         self.p_zpass.render(
             &primary_gpu,
             &camera_buffers,
@@ -608,6 +705,7 @@ impl MgpuShadowMaskContext {
             if primary_gpu.copy_queue.is_complete(v) {
                 self.mgpu_mask.next_copy_texture();
                 self.mgpu_mask.states[copy_texture] = MgpuState::WaitForWrite;
+
                 copy_texture
             } else {
                 if copy_texture == 0 {
@@ -646,6 +744,7 @@ impl MgpuShadowMaskContext {
             &self.p_gbuffer,
             swapchain_view,
         );
+        frame_stats.primary_cmd_gfx = timer.elapsed().as_secs_f32();
     }
 }
 
@@ -760,9 +859,18 @@ impl Application {
             .get_high_perf_device()
             .expect("Failed to fetch high perf gpu");
 
+        primary_gpu
+            .gfx_queue
+            .init_timestamp_query(&primary_gpu, FRAMES_IN_FLIGHT * 2);
+        primary_gpu.copy_queue.init_timestamp_query(&primary_gpu, 2);
+
         let secondary_gpu = device_manager
             .get_high_perf_device()
             .unwrap_or_else(|| device_manager.get_warp());
+
+        secondary_gpu
+            .gfx_queue
+            .init_timestamp_query(&secondary_gpu, 2);
 
         let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
 
@@ -841,6 +949,7 @@ impl Application {
             wnd_title: "Multi-GPU Shadows Sample".to_string(),
             timer: GameTimer::default(),
             app_paused: false,
+            frame_num: 0,
             curr_frame: 0,
             camera,
             camera_controller: controller,
@@ -854,6 +963,7 @@ impl Application {
             mgpu_shadow_mask,
 
             curr_context: RenderContext::SingleGpu,
+            stats: Vec::new(),
         }
     }
 
@@ -927,6 +1037,11 @@ impl Application {
             return;
         };
 
+        let mut frame_stat = FrameStats {
+            frame_idx: self.frame_num,
+            ..Default::default()
+        };
+
         let list = self
             .primary_gpu
             .gfx_queue
@@ -935,6 +1050,11 @@ impl Application {
 
         list.begin(&self.primary_gpu);
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
+
+        if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
+            list.start_timestamp(&query, self.curr_frame * 2);
+        }
+
         self.primary_gpu.gfx_queue.stash_cmd_buffer(list);
 
         match self.curr_context {
@@ -947,6 +1067,7 @@ impl Application {
                     &self.gpu_mesh,
                     self.curr_frame,
                     &view,
+                    &mut frame_stat,
                 );
             }
             RenderContext::MgpuCsm => {
@@ -961,6 +1082,7 @@ impl Application {
                     &self.gpu_mesh,
                     self.curr_frame,
                     view,
+                    &mut frame_stat,
                 );
             }
             RenderContext::MgpuShadowMask => {
@@ -975,6 +1097,7 @@ impl Application {
                     &self.gpu_mesh,
                     self.curr_frame,
                     view,
+                    &mut frame_stat,
                 );
             }
         }
@@ -983,15 +1106,34 @@ impl Application {
             .primary_gpu
             .gfx_queue
             .get_command_buffer(&self.primary_gpu);
+
+        if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
+            list.end_timestamp(&query, self.curr_frame * 2 + 1);
+        }
+
         list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
 
         self.primary_gpu.gfx_queue.push_cmd_buffer(list);
         *sync_point = self.primary_gpu.gfx_queue.execute();
         ctx.swapchain.present(false);
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
-        self.primary_gpu
+        self.frame_num += 1;
+
+        if self
+            .primary_gpu
             .gfx_queue
-            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
+            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3)
+        {
+            if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
+                let mut gfx_timestamp = [0u64; 2];
+                query.read(
+                    Some((self.curr_frame * 2)..(self.curr_frame * 2 + 1)),
+                    &mut gfx_timestamp,
+                );
+            }
+        }
+
+        self.stats.push(frame_stat);
     }
 
     pub fn bind_window(&mut self, window: Window) {
@@ -1090,6 +1232,8 @@ impl ApplicationHandler for Application {
             WindowEvent::KeyboardInput { event, .. } => match event.state {
                 winit::event::ElementState::Pressed => {
                     if event.physical_key == KeyCode::Escape {
+                        // TODO: save in json
+                        dbg!(&self.stats);
                         event_loop.exit();
                     } else if event.physical_key == KeyCode::KeyI {
                         self.curr_context.next();
