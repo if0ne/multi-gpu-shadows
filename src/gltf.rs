@@ -1,6 +1,6 @@
 use crate::{
-    rhi::{self, Device, DeviceMask, FRAMES_IN_FLIGHT},
-    GpuMaterial, GpuTransform,
+    rhi::{self, Device, DeviceMask},
+    GpuMaterial,
 };
 use std::{path::Path, sync::Arc};
 
@@ -105,8 +105,6 @@ impl Mesh {
                 normal_map: m.normal_texture().map(|m| m.texture().index()),
             })
             .collect();
-
-        info!("Fetched materials: {:?}", res.materials);
 
         let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
             if let Some(mesh) = node.mesh() {
@@ -284,7 +282,14 @@ pub struct GpuMesh {
 
 impl GpuMesh {
     pub fn new(builder: GpuMeshBuilder<'_>) -> Self {
-        info!("Creating GPU Mesh: {:?}", builder);
+        info!(
+            "Creating GPU Mesh devices {:?}, normals: {:?}, uv: {:?}, tangent: {:?}, materials: {:?}", 
+            builder.devices,
+            builder.normal_vb,
+            builder.uv_vb,
+            builder.tangent_vb,
+            builder.materials
+        );
 
         let all_executors = builder
             .devices
@@ -458,12 +463,6 @@ impl GpuMesh {
             materials
         };
 
-        let transform = rhi::Buffer::constant::<GpuTransform>(
-            FRAMES_IN_FLIGHT,
-            "Transform Buffer",
-            builder.devices,
-        );
-
         let images = builder
             .mesh
             .images
@@ -541,7 +540,6 @@ impl GpuMesh {
             tangent_vb,
             ib,
             gpu_materials: materials,
-            transform,
             images: images.into_iter().map(|(i, _)| i).collect(),
             image_views,
 

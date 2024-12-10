@@ -76,7 +76,7 @@ impl MeshCache {
 
                 let handle = MeshHandle { idx, gen: self.gen };
 
-                vacant_entry.insert_entry(handle);
+                vacant_entry.insert(handle);
                 self.handle_to_mesh.insert(handle, gpu_mesh);
 
                 handle

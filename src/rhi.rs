@@ -554,24 +554,24 @@ impl SharedFence {
                 panic!("Device lost")
             }
         }
+    }
 
-        pub fn connect(&self, device: &Arc<Device>) -> Self {
-            let handle = self
-                .owner
-                .gpu
-                .create_shared_handle(&self.fence, None)
-                .expect("Failed to create shared handle");
-            let fence = device
-                .gpu
-                .open_shared_handle(handle)
-                .expect("Failed to open shared handle");
-            handle.close().unwrap();
+    pub fn connect(&self, device: &Arc<Device>) -> Self {
+        let handle = self
+            .owner
+            .gpu
+            .create_shared_handle(&self.fence, None)
+            .expect("Failed to create shared handle");
+        let fence = device
+            .gpu
+            .open_shared_handle(handle)
+            .expect("Failed to open shared handle");
+        handle.close().unwrap();
 
-            Self {
-                owner: Arc::clone(device),
-                fence,
-                value: Arc::clone(&self.value),
-            }
+        Self {
+            owner: Arc::clone(device),
+            fence,
+            value: Arc::clone(&self.value),
         }
     }
 }
@@ -844,13 +844,13 @@ impl DeviceTexture {
 
         info!(
             "Creating texture for {:?}, width: {}, height: {}, array: {}, format: {:?}, levels: {}, flags: {:?}, state: {:?}", 
-            device.id, 
-            width, 
-            height, 
-            array, 
-            format, 
-            levels, 
-            flags, 
+            device.id,
+            width,
+            height,
+            array,
+            format,
+            levels,
+            flags,
             state
         );
 
@@ -987,15 +987,16 @@ impl SharedTexture {
 
         let size = device
             .gpu
-            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None);
+            .get_copyable_footprints(&cross_desc, 0..1, 0, None, None, None)
+            * 2; // FIX: Textures of arbitrary size require more memory than get_copyable_footprints returns
 
         info!(
             "Shared texture texture for {:?}, width: {}, height: {}, format: {:?}, flags: {:?}, state: {:?}, size: {} bytes", 
-            device.id, 
-            width, 
-            height, 
-            format, 
-            flags, 
+            device.id,
+            width,
+            height,
+            format,
+            flags,
             state,
             size
         );
@@ -1111,11 +1112,11 @@ impl SharedTexture {
 
         info!(
             "Shared texture texture for {:?}, width: {}, height: {}, format: {:?}, flags: {:?}, state: {:?}", 
-            other.id, 
+            other.id,
             self.desc.width(),
             self.desc.height(),
             self.desc.format(),
-            flags, 
+            flags,
             state,
         );
 
@@ -1778,7 +1779,7 @@ impl ShaderCache {
                 self.next_idx += 1;
 
                 let handle = ShaderHandle { idx, gen: self.gen };
-                vacant_entry.insert_entry(handle);
+                vacant_entry.insert(handle);
 
                 self.handle_to_shader.insert(handle, compiled_shader);
 
@@ -2014,7 +2015,7 @@ impl RasterPipelineCache {
                 self.next_idx += 1;
 
                 let handle = PipelineHandle { idx, gen: self.gen };
-                vacant_entry.insert_entry(handle);
+                vacant_entry.insert(handle);
                 self.handle_to_pso.insert(handle, pso);
 
                 handle
@@ -2192,12 +2193,12 @@ impl DeviceBuffer {
         inner_ty: TypeId,
     ) -> Self {
         info!("Creating device buffer for {:?}, size: {}, stride: {}, ty: {:?}, readback: {}, name: {}, inner_ty: {:?}", 
-            device.id, 
-            size, 
-            stride, 
-            ty, 
-            readback, 
-            name, 
+            device.id,
+            size,
+            stride,
+            ty,
+            readback,
+            name,
             inner_ty
         );
 
@@ -2219,7 +2220,13 @@ impl DeviceBuffer {
         };
 
         let state = match ty {
-            BufferType::Copy | BufferType::Constant => dx::ResourceStates::GenericRead,
+            BufferType::Copy | BufferType::Constant => {
+                if readback {
+                    dx::ResourceStates::CopyDest
+                } else {
+                    dx::ResourceStates::GenericRead
+                }
+            }
             _ => dx::ResourceStates::Common,
         };
 
@@ -2563,8 +2570,7 @@ impl CommandBuffer {
         self.list.resolve_query_data(
             &timestamp.raw,
             dx::QueryType::Timestamp,
-            range.start,
-            range.end - range.start,
+            range,
             &timestamp.resolve_buffer.res.res,
             0,
         );
@@ -2842,7 +2848,7 @@ impl TimestampQueryHeap {
             device,
             count * size_of::<u64>(),
             0,
-            BufferType::Storage,
+            BufferType::Copy,
             true,
             "Resolve Buffer",
             TypeId::of::<u64>(),

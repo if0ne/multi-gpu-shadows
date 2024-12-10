@@ -36,10 +36,7 @@ use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use scene::{Entity, MeshCache, Scene};
 use timer::GameTimer;
-use tracing_subscriber::{
-    fmt::{self, writer::MakeWriterExt},
-    layer::SubscriberExt,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -571,7 +568,10 @@ impl MgpuShadowMaskContext {
         secondary_pso_cache: &mut rhi::RasterPipelineCache,
         primary_placeholder: &TexturePlaceholders,
         camera: &Camera,
-        camera_buffers: &rhi::DeviceBuffer,
+        camera_controller: &FpsController,
+        camera_buffers: &mut rhi::DeviceBuffer,
+        width: u32,
+        height: u32,
         scene: &Scene,
         mesh_cache: &MeshCache,
         curr_frame: usize,
@@ -584,6 +584,23 @@ impl MgpuShadowMaskContext {
         if secondary_gpu.gfx_queue.is_ready()
             && self.mgpu_mask.states[working_texture] == MgpuState::WaitForWrite
         {
+            self.mgpu_mask.camera_buffers.write(
+                working_texture,
+                GpuGlobals {
+                    view: camera.view,
+                    proj: camera.proj(),
+                    eye_pos: camera_controller.position,
+                    proj_view: camera.proj() * camera.view,
+                    inv_view: camera.view.inverse(),
+                    inv_proj: camera.proj().inverse(),
+                    inv_proj_view: (camera.proj() * camera.view).inverse(),
+                    screen_dim: vec2(width as f32, height as f32),
+
+                    _pad0: 0.0,
+                    _pad1: Vec2::ZERO,
+                },
+            );
+
             self.s_csm
                 .update(camera, vec3(-1.0, -1.0, -1.0), working_texture);
 
@@ -606,9 +623,9 @@ impl MgpuShadowMaskContext {
 
             self.s_zpass.render(
                 secondary_gpu,
-                camera_buffers,
+                &self.mgpu_mask.camera_buffers,
                 &secondary_pso_cache,
-                curr_frame,
+                working_texture,
                 scene,
                 mesh_cache,
             );
@@ -618,7 +635,7 @@ impl MgpuShadowMaskContext {
                 scene,
                 mesh_cache,
                 &secondary_pso_cache,
-                curr_frame,
+                working_texture,
             );
 
             self.mgpu_mask.render(
@@ -706,7 +723,7 @@ impl MgpuShadowMaskContext {
         let timer = Instant::now();
         self.p_zpass.render(
             &primary_gpu,
-            &camera_buffers,
+            camera_buffers,
             &primary_pso_cache,
             curr_frame,
             scene,
@@ -719,7 +736,7 @@ impl MgpuShadowMaskContext {
             mesh_cache,
             &primary_placeholder,
             &primary_pso_cache,
-            &camera_buffers,
+            camera_buffers,
             curr_frame,
             &self.p_zpass,
         );
@@ -754,7 +771,7 @@ impl MgpuShadowMaskContext {
 
         self.p_dir_light_pass.render(
             &primary_gpu,
-            &camera_buffers,
+            camera_buffers,
             &primary_pso_cache,
             curr_frame,
             &self.p_gbuffer,
@@ -885,7 +902,6 @@ impl Application {
         primary_gpu
             .gfx_queue
             .init_timestamp_query(&primary_gpu, FRAMES_IN_FLIGHT * 2);
-        primary_gpu.copy_queue.init_timestamp_query(&primary_gpu, 2);
 
         let secondary_gpu = device_manager
             .get_high_perf_device()
@@ -995,7 +1011,7 @@ impl Application {
             mgpu_csm,
             mgpu_shadow_mask,
 
-            curr_context: RenderContext::SingleGpu,
+            curr_context: RenderContext::MgpuShadowMask,
             stats: Vec::new(),
 
             scene,
@@ -1131,7 +1147,10 @@ impl Application {
                     &mut self.secondary_pso_cache,
                     &self.primary_placeholder,
                     &self.camera,
-                    &self.camera_buffers,
+                    &self.camera_controller,
+                    &mut self.camera_buffers,
+                    self.window_width,
+                    self.window_height,
                     &self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
@@ -1148,6 +1167,7 @@ impl Application {
 
         if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
             list.end_timestamp(&query, self.curr_frame * 2 + 1);
+            list.resolve_timestamp(&query, Some(self.curr_frame * 2..(self.curr_frame * 2 + 2)));
         }
 
         list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
@@ -1158,18 +1178,18 @@ impl Application {
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.frame_num += 1;
 
-        if self
-            .primary_gpu
+        self.primary_gpu
             .gfx_queue
-            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3)
-        {
-            if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
-                let mut gfx_timestamp = [0u64; 2];
-                query.read(
-                    Some((self.curr_frame * 2)..(self.curr_frame * 2 + 1)),
-                    &mut gfx_timestamp,
-                );
-            }
+            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
+
+        if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
+            let mut gfx_timestamp = [0u64; 2];
+            query.read(
+                Some((self.curr_frame * 2)..(self.curr_frame * 2 + 2)),
+                &mut gfx_timestamp,
+            );
+            frame_stat.primary_gfx = (gfx_timestamp[1] - gfx_timestamp[0]) as f32
+                / self.primary_gpu.gfx_queue.frequency as f32;
         }
 
         self.stats.push(frame_stat);
@@ -1272,17 +1292,13 @@ impl ApplicationHandler for Application {
                 winit::event::ElementState::Pressed => {
                     if event.physical_key == KeyCode::Escape {
                         // TODO: save in json
-                        dbg!(&self.stats);
+                        //dbg!(&self.stats);
                         event_loop.exit();
                     } else if event.physical_key == KeyCode::KeyI {
                         self.curr_context.next();
 
-                        if let Some(ctx) = &mut self.wnd_ctx {
-                            ctx.window.set_title(&format!(
-                                "Multi-GPU Shadows Sample Mode: {:?}",
-                                self.curr_context
-                            ));
-                        }
+                        self.wnd_title =
+                            format!("Multi-GPU Shadows Sample Mode: {:?}", self.curr_context);
                     }
                     self.keys.insert(event.physical_key, true);
                 }
@@ -1427,11 +1443,9 @@ impl ApplicationHandler for Application {
 }
 
 fn main() {
-    let console_log = fmt::Layer::new().with_ansi(true).with_writer(
-        std::io::stdout
-            .with_min_level(tracing::Level::ERROR)
-            .with_max_level(tracing::Level::INFO),
-    );
+    let console_log = fmt::Layer::new()
+        .with_ansi(true)
+        .with_writer(std::io::stdout);
 
     let subscriber = tracing_subscriber::registry().with(console_log);
 

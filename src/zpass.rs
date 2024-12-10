@@ -3,7 +3,6 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 use oxidx::dx;
 
 use crate::{
-    gltf::GpuMesh,
     rhi,
     scene::{MeshCache, Scene},
 };
