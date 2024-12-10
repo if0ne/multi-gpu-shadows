@@ -241,10 +241,8 @@ impl CascadedShadowMapsPass {
             .iter()
             .enumerate()
             .for_each(|(i, pv)| {
-                self.gpu_csm_proj_view_buffer.write(
-                    4 * frame_index + i,
-                    GpuCSMProjView { proj_vies: *pv },
-                );
+                self.gpu_csm_proj_view_buffer
+                    .write(4 * frame_index + i, GpuCSMProjView { proj_vies: *pv });
             });
     }
 

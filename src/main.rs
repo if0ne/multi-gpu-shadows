@@ -24,16 +24,16 @@ use std::{
 use camera::{Camera, FpsController};
 use csm_pass::CascadedShadowMapsPass;
 use dir_light_pass::DirectionalLightPass;
+use dir_light_pass_with_mask::DirectionalLightWithMaskPass;
 use gamma_correction_pass::GammaCorrectionPass;
 use gbuffer_pass::GbufferPass;
 use glam::{vec2, vec3, Mat4, Vec2, Vec3};
 use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
 use m_csm_pass::MgpuCascadedShadowMapsPass;
-use m_shadow_mask_pass::MgpuState;
+use m_shadow_mask_pass::{MgpuShadowMaskPass, MgpuState};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
 use timer::GameTimer;
-use tracing::info;
 use tracing_subscriber::{
     fmt::{self, writer::MakeWriterExt},
     layer::SubscriberExt,
@@ -89,6 +89,23 @@ pub struct GpuTransform {
     pub world: Mat4,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RenderContext {
+    SingleGpu,
+    MgpuCsm,
+    MgpuShadowMask,
+}
+
+impl RenderContext {
+    pub fn next(&mut self) {
+        match *self {
+            RenderContext::SingleGpu => *self = RenderContext::MgpuCsm,
+            RenderContext::MgpuCsm => *self = RenderContext::MgpuShadowMask,
+            RenderContext::MgpuShadowMask => *self = RenderContext::SingleGpu,
+        }
+    }
+}
+
 pub struct Application {
     pub device_manager: rhi::DeviceManager,
     pub shader_cache: rhi::ShaderCache,
@@ -119,9 +136,10 @@ pub struct Application {
     pub window_height: u32,
 
     pub single_gpu: SingleGpuContext,
-    pub mgpu: MgpuContext,
+    pub mgpu_csm: MgpuCsmContext,
+    pub mgpu_shadow_mask: MgpuShadowMaskContext,
 
-    pub is_single: bool,
+    pub curr_context: RenderContext,
 }
 
 pub struct SingleGpuContext {
@@ -214,7 +232,7 @@ impl SingleGpuContext {
     }
 }
 
-pub struct MgpuContext {
+pub struct MgpuCsmContext {
     pub p_zpass: ZPass,
     pub p_gbuffer: GbufferPass,
     pub p_dir_light_pass: DirectionalLightPass,
@@ -223,7 +241,7 @@ pub struct MgpuContext {
     pub mgpu_csm: MgpuCascadedShadowMapsPass,
 }
 
-impl MgpuContext {
+impl MgpuCsmContext {
     pub fn new(
         primary_gpu: &Arc<rhi::Device>,
         secondary_gpu: &Arc<rhi::Device>,
@@ -408,6 +426,229 @@ impl MgpuContext {
     }
 }
 
+pub struct MgpuShadowMaskContext {
+    pub p_zpass: ZPass,
+    pub p_gbuffer: GbufferPass,
+    pub p_dir_light_pass: DirectionalLightWithMaskPass,
+    pub p_gamma_correction_pass: GammaCorrectionPass,
+
+    pub s_zpass: ZPass,
+    pub s_csm: CascadedShadowMapsPass,
+    pub mgpu_mask: MgpuShadowMaskPass,
+}
+
+impl MgpuShadowMaskContext {
+    pub fn new(
+        primary_gpu: &Arc<rhi::Device>,
+        secondary_gpu: &Arc<rhi::Device>,
+        shader_cache: &mut rhi::ShaderCache,
+        primary_pso_cache: &mut rhi::RasterPipelineCache,
+        secondary_pso_cache: &mut rhi::RasterPipelineCache,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let p_zpass = ZPass::new(&primary_gpu, width, height, shader_cache, primary_pso_cache);
+        let p_gbuffer =
+            GbufferPass::new(width, height, &primary_gpu, shader_cache, primary_pso_cache);
+        let p_dir_light_pass =
+            DirectionalLightWithMaskPass::new(&primary_gpu, shader_cache, primary_pso_cache);
+        let p_gamma_correction_pass =
+            GammaCorrectionPass::new(&primary_gpu, shader_cache, primary_pso_cache);
+
+        let s_zpass = ZPass::new(
+            &secondary_gpu,
+            width,
+            height,
+            shader_cache,
+            secondary_pso_cache,
+        );
+        let s_csm = CascadedShadowMapsPass::new(
+            &secondary_gpu,
+            1024,
+            0.5,
+            shader_cache,
+            secondary_pso_cache,
+        );
+
+        let mgpu_mask = MgpuShadowMaskPass::new(
+            &primary_gpu,
+            &secondary_gpu,
+            width,
+            height,
+            shader_cache,
+            secondary_pso_cache,
+        );
+
+        Self {
+            p_zpass,
+            p_gbuffer,
+            p_dir_light_pass,
+            p_gamma_correction_pass,
+            s_zpass,
+            s_csm,
+            mgpu_mask,
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        primary_gpu: &Arc<rhi::Device>,
+        secondary_gpu: &Arc<rhi::Device>,
+        primary_pso_cache: &mut rhi::RasterPipelineCache,
+        secondary_pso_cache: &mut rhi::RasterPipelineCache,
+        primary_placeholder: &TexturePlaceholders,
+        camera: &Camera,
+        camera_buffers: &rhi::DeviceBuffer,
+        gpu_mesh: &GpuMesh,
+        curr_frame: usize,
+        swapchain_view: &rhi::DeviceTextureView,
+    ) {
+        let copy_texture = self.mgpu_mask.copy_texture.load(Ordering::Acquire);
+        let working_texture = self.mgpu_mask.working_texture.load(Ordering::Acquire);
+
+        if secondary_gpu.gfx_queue.is_ready()
+            && self.mgpu_mask.states[working_texture] == MgpuState::WaitForWrite
+        {
+            self.s_csm
+                .update(camera, vec3(-1.0, -1.0, -1.0), working_texture);
+
+            let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
+
+            list.begin(&secondary_gpu);
+            secondary_gpu.gfx_queue.stash_cmd_buffer(list);
+
+            self.s_zpass.render(
+                secondary_gpu,
+                camera_buffers,
+                &secondary_pso_cache,
+                curr_frame,
+                gpu_mesh,
+            );
+
+            self.s_csm
+                .render(secondary_gpu, gpu_mesh, &secondary_pso_cache, curr_frame);
+
+            self.mgpu_mask.render(
+                &secondary_gpu,
+                &secondary_pso_cache,
+                &self.s_zpass,
+                &self.s_csm,
+            );
+
+            let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
+
+            match &self.mgpu_mask.sender[working_texture].state {
+                rhi::SharedTextureState::CrossAdapter { .. } => {
+                    // noop
+                }
+                rhi::SharedTextureState::Binded { cross, local } => {
+                    list.set_device_texture_barriers(&[
+                        (&cross, dx::ResourceStates::CopyDest),
+                        (&local, dx::ResourceStates::CopySource),
+                    ]);
+                    list.copy_texture_to_texture(cross, local);
+                }
+            };
+
+            secondary_gpu.gfx_queue.push_cmd_buffer(list);
+            secondary_gpu.gfx_queue.execute();
+            self.mgpu_mask.states[working_texture] = MgpuState::WaitForCopy(
+                secondary_gpu
+                    .gfx_queue
+                    .signal_shared(&self.mgpu_mask.sender_fence),
+            );
+        }
+
+        if let MgpuState::WaitForCopy(v) = self.mgpu_mask.states[copy_texture] {
+            if primary_gpu.copy_queue.is_ready()
+                && self.mgpu_mask.recv_fence.get_completed_value() >= v
+            {
+                self.mgpu_mask.next_working_texture();
+
+                let list = primary_gpu.copy_queue.get_command_buffer(&primary_gpu);
+
+                match &self.mgpu_mask.recv[copy_texture].state {
+                    rhi::SharedTextureState::CrossAdapter { .. } => {
+                        // noop
+                    }
+                    rhi::SharedTextureState::Binded { cross, local } => {
+                        list.set_device_texture_barriers(&[
+                            (cross, dx::ResourceStates::CopySource),
+                            (local, dx::ResourceStates::CopyDest),
+                        ]);
+                        list.copy_texture_to_texture(local, cross);
+                    }
+                };
+
+                primary_gpu.copy_queue.push_cmd_buffer(list);
+                self.mgpu_mask.states[copy_texture] =
+                    MgpuState::WaitForRead(primary_gpu.copy_queue.execute());
+            }
+        }
+
+        self.p_zpass.render(
+            &primary_gpu,
+            &camera_buffers,
+            &primary_pso_cache,
+            curr_frame,
+            &gpu_mesh,
+        );
+
+        self.p_gbuffer.render(
+            &primary_gpu,
+            &gpu_mesh,
+            &primary_placeholder,
+            &primary_pso_cache,
+            &camera_buffers,
+            curr_frame,
+            &self.p_zpass,
+        );
+
+        let copy_texture = if let MgpuState::WaitForRead(v) = self.mgpu_mask.states[copy_texture] {
+            if primary_gpu.copy_queue.is_complete(v) {
+                self.mgpu_mask.next_copy_texture();
+                self.mgpu_mask.states[copy_texture] = MgpuState::WaitForWrite;
+                copy_texture
+            } else {
+                if copy_texture == 0 {
+                    FRAMES_IN_FLIGHT - 1
+                } else {
+                    copy_texture - 1
+                }
+            }
+        } else {
+            if copy_texture == 0 {
+                FRAMES_IN_FLIGHT - 1
+            } else {
+                copy_texture - 1
+            }
+        };
+
+        let (texture_mask, view_mask) = {
+            (
+                &self.mgpu_mask.recv[copy_texture],
+                &self.mgpu_mask.recv_srv[copy_texture],
+            )
+        };
+
+        self.p_dir_light_pass.render(
+            &primary_gpu,
+            &camera_buffers,
+            &primary_pso_cache,
+            curr_frame,
+            &self.p_gbuffer,
+            (texture_mask.local_resource(), view_mask),
+        );
+
+        self.p_gamma_correction_pass.render(
+            &primary_gpu,
+            &primary_pso_cache,
+            &self.p_gbuffer,
+            swapchain_view,
+        );
+    }
+}
+
 pub struct TexturePlaceholders {
     pub diffuse_placeholder: rhi::DeviceTexture,
     pub diffuse_placeholder_view: rhi::DeviceTextureView,
@@ -564,7 +805,17 @@ impl Application {
             width,
             height,
         );
-        let mgpu = MgpuContext::new(
+        let mgpu_csm = MgpuCsmContext::new(
+            &primary_gpu,
+            &secondary_gpu,
+            &mut shader_cache,
+            &mut primary_pso_cache,
+            &mut secondary_pso_cache,
+            width,
+            height,
+        );
+
+        let mgpu_shadow_mask = MgpuShadowMaskContext::new(
             &primary_gpu,
             &secondary_gpu,
             &mut shader_cache,
@@ -599,9 +850,10 @@ impl Application {
             gpu_mesh,
 
             single_gpu,
-            mgpu,
+            mgpu_csm,
+            mgpu_shadow_mask,
 
-            is_single: false,
+            curr_context: RenderContext::SingleGpu,
         }
     }
 
@@ -685,29 +937,46 @@ impl Application {
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
         self.primary_gpu.gfx_queue.stash_cmd_buffer(list);
 
-        if self.is_single {
-            self.single_gpu.render(
-                &self.primary_gpu,
-                &mut self.primary_pso_cache,
-                &self.primary_placeholder,
-                &self.camera_buffers,
-                &self.gpu_mesh,
-                self.curr_frame,
-                &view,
-            );
-        } else {
-            self.mgpu.render(
-                &self.primary_gpu,
-                &self.secondary_gpu,
-                &mut self.primary_pso_cache,
-                &mut self.secondary_pso_cache,
-                &self.primary_placeholder,
-                &self.camera,
-                &self.camera_buffers,
-                &self.gpu_mesh,
-                self.curr_frame,
-                view,
-            );
+        match self.curr_context {
+            RenderContext::SingleGpu => {
+                self.single_gpu.render(
+                    &self.primary_gpu,
+                    &mut self.primary_pso_cache,
+                    &self.primary_placeholder,
+                    &self.camera_buffers,
+                    &self.gpu_mesh,
+                    self.curr_frame,
+                    &view,
+                );
+            }
+            RenderContext::MgpuCsm => {
+                self.mgpu_csm.render(
+                    &self.primary_gpu,
+                    &self.secondary_gpu,
+                    &mut self.primary_pso_cache,
+                    &mut self.secondary_pso_cache,
+                    &self.primary_placeholder,
+                    &self.camera,
+                    &self.camera_buffers,
+                    &self.gpu_mesh,
+                    self.curr_frame,
+                    view,
+                );
+            }
+            RenderContext::MgpuShadowMask => {
+                self.mgpu_shadow_mask.render(
+                    &self.primary_gpu,
+                    &self.secondary_gpu,
+                    &mut self.primary_pso_cache,
+                    &mut self.secondary_pso_cache,
+                    &self.primary_placeholder,
+                    &self.camera,
+                    &self.camera_buffers,
+                    &self.gpu_mesh,
+                    self.curr_frame,
+                    view,
+                );
+            }
         }
 
         let list = self
@@ -823,7 +1092,14 @@ impl ApplicationHandler for Application {
                     if event.physical_key == KeyCode::Escape {
                         event_loop.exit();
                     } else if event.physical_key == KeyCode::KeyI {
-                        self.is_single = !self.is_single;
+                        self.curr_context.next();
+
+                        if let Some(ctx) = &mut self.wnd_ctx {
+                            ctx.window.set_title(&format!(
+                                "Multi-GPU Shadows Sample Mode: {:?}",
+                                self.curr_context
+                            ));
+                        }
                     }
                     self.keys.insert(event.physical_key, true);
                 }
@@ -864,7 +1140,7 @@ impl ApplicationHandler for Application {
                     );
                     self.curr_frame = 0;
 
-                    self.mgpu.p_zpass = ZPass::new(
+                    self.mgpu_csm.p_zpass = ZPass::new(
                         &self.primary_gpu,
                         size.width,
                         size.height,
@@ -872,7 +1148,7 @@ impl ApplicationHandler for Application {
                         &mut self.primary_pso_cache,
                     );
 
-                    self.mgpu.p_gbuffer = GbufferPass::new(
+                    self.mgpu_csm.p_gbuffer = GbufferPass::new(
                         size.width,
                         size.height,
                         &self.primary_gpu,
@@ -894,6 +1170,39 @@ impl ApplicationHandler for Application {
                         &self.primary_gpu,
                         &mut self.shader_cache,
                         &mut self.primary_pso_cache,
+                    );
+
+                    self.mgpu_shadow_mask.p_zpass = ZPass::new(
+                        &self.primary_gpu,
+                        size.width,
+                        size.height,
+                        &mut self.shader_cache,
+                        &mut self.primary_pso_cache,
+                    );
+
+                    self.mgpu_shadow_mask.p_gbuffer = GbufferPass::new(
+                        size.width,
+                        size.height,
+                        &self.primary_gpu,
+                        &mut self.shader_cache,
+                        &mut self.primary_pso_cache,
+                    );
+
+                    self.mgpu_shadow_mask.s_zpass = ZPass::new(
+                        &self.secondary_gpu,
+                        size.width,
+                        size.height,
+                        &mut self.shader_cache,
+                        &mut self.secondary_pso_cache,
+                    );
+
+                    self.mgpu_shadow_mask.mgpu_mask = MgpuShadowMaskPass::new(
+                        &self.primary_gpu,
+                        &self.secondary_gpu,
+                        size.width,
+                        size.height,
+                        &mut self.shader_cache,
+                        &mut self.secondary_pso_cache,
                     );
                 }
             }
