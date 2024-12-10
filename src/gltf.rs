@@ -274,7 +274,6 @@ pub struct GpuMesh {
 
     pub ib: rhi::Buffer,
     pub gpu_materials: rhi::Buffer,
-    pub transform: rhi::Buffer,
 
     pub images: Vec<rhi::Texture>,
     pub image_views: Vec<rhi::TextureView>,

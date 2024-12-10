@@ -1778,6 +1778,7 @@ impl ShaderCache {
                 self.next_idx += 1;
 
                 let handle = ShaderHandle { idx, gen: self.gen };
+                vacant_entry.insert_entry(handle);
 
                 self.handle_to_shader.insert(handle, compiled_shader);
 
@@ -2013,7 +2014,7 @@ impl RasterPipelineCache {
                 self.next_idx += 1;
 
                 let handle = PipelineHandle { idx, gen: self.gen };
-
+                vacant_entry.insert_entry(handle);
                 self.handle_to_pso.insert(handle, pso);
 
                 handle
@@ -2079,6 +2080,12 @@ impl Buffer {
 
     pub fn get_buffer(&self, device_id: DeviceMask) -> Option<&'_ DeviceBuffer> {
         self.buffers.iter().find(|b| b.res.device_id.eq(&device_id))
+    }
+
+    pub fn get_mut_buffer(&mut self, device_id: DeviceMask) -> Option<&'_ mut DeviceBuffer> {
+        self.buffers
+            .iter_mut()
+            .find(|b| b.res.device_id.eq(&device_id))
     }
 
     pub fn write<T: Clone + 'static>(&mut self, index: usize, data: &T) {

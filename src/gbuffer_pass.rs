@@ -2,7 +2,13 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use oxidx::dx;
 
-use crate::{gltf::GpuMesh, rhi, zpass::ZPass, TexturePlaceholders};
+use crate::{
+    gltf::GpuMesh,
+    rhi,
+    scene::{MeshCache, Scene},
+    zpass::ZPass,
+    TexturePlaceholders,
+};
 
 #[derive(Debug)]
 pub struct GbufferPass {
@@ -272,7 +278,8 @@ impl GbufferPass {
     pub fn render(
         &self,
         device: &Arc<rhi::Device>,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
         placeholder: &TexturePlaceholders,
         pso_cache: &rhi::RasterPipelineCache,
         camera_buffer: &rhi::DeviceBuffer,
@@ -304,51 +311,55 @@ impl GbufferPass {
 
         list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
-        list.set_vertex_buffers(&[
-            &gpu_mesh.pos_vb,
-            &gpu_mesh.normal_vb,
-            &gpu_mesh.uv_vb,
-            &gpu_mesh.tangent_vb,
-        ]);
-        list.set_index_buffer(&gpu_mesh.ib);
+        for entity in &scene.entities {
+            let gpu_mesh = mesh_cache.get_mesh(&entity.mesh);
 
-        for submesh in &gpu_mesh.sub_meshes {
-            list.set_graphics_cbv(
-                &gpu_mesh
-                    .gpu_materials
-                    .get_buffer(device.id)
-                    .expect("Not found device")
-                    .cbv[submesh.material_idx],
-                1,
-            );
+            list.set_vertex_buffers(&[
+                &gpu_mesh.pos_vb,
+                &gpu_mesh.normal_vb,
+                &gpu_mesh.uv_vb,
+                &gpu_mesh.tangent_vb,
+            ]);
+            list.set_index_buffer(&gpu_mesh.ib);
 
-            if let Some(map) = gpu_mesh.materials[submesh.material_idx].diffuse_map {
-                list.set_graphics_srv(
-                    &gpu_mesh.image_views[map]
-                        .get_view(device.id)
-                        .expect("Not found texture view"),
-                    2,
+            for submesh in &gpu_mesh.sub_meshes {
+                list.set_graphics_cbv(
+                    &gpu_mesh
+                        .gpu_materials
+                        .get_buffer(device.id)
+                        .expect("Not found device")
+                        .cbv[submesh.material_idx],
+                    1,
                 );
-            } else {
-                list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 2);
-            }
 
-            if let Some(map) = gpu_mesh.materials[submesh.material_idx].normal_map {
-                list.set_graphics_srv(
-                    &gpu_mesh.image_views[map]
-                        .get_view(device.id)
-                        .expect("Not found texture view"),
-                    3,
+                if let Some(map) = gpu_mesh.materials[submesh.material_idx].diffuse_map {
+                    list.set_graphics_srv(
+                        &gpu_mesh.image_views[map]
+                            .get_view(device.id)
+                            .expect("Not found texture view"),
+                        2,
+                    );
+                } else {
+                    list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 2);
+                }
+
+                if let Some(map) = gpu_mesh.materials[submesh.material_idx].normal_map {
+                    list.set_graphics_srv(
+                        &gpu_mesh.image_views[map]
+                            .get_view(device.id)
+                            .expect("Not found texture view"),
+                        3,
+                    );
+                } else {
+                    list.set_graphics_srv(&placeholder.normal_placeholder_view, 3);
+                }
+
+                list.draw_indexed(
+                    submesh.index_count,
+                    submesh.start_index_location,
+                    submesh.base_vertex_location as i32,
                 );
-            } else {
-                list.set_graphics_srv(&placeholder.normal_placeholder_view, 3);
             }
-
-            list.draw_indexed(
-                submesh.index_count,
-                submesh.start_index_location,
-                submesh.base_vertex_location as i32,
-            );
         }
 
         device.gfx_queue.stash_cmd_buffer(list);

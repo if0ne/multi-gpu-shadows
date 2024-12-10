@@ -7,6 +7,7 @@ use crate::{
     camera::Camera,
     gltf::GpuMesh,
     rhi::{self, FRAMES_IN_FLIGHT},
+    scene::{MeshCache, Scene},
 };
 
 #[derive(Clone, Debug)]
@@ -249,7 +250,8 @@ impl CascadedShadowMapsPass {
     pub fn render(
         &self,
         device: &Arc<rhi::Device>,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
     ) {
@@ -271,15 +273,19 @@ impl CascadedShadowMapsPass {
                 0,
             );
 
-            list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
-            list.set_index_buffer(&gpu_mesh.ib);
+            for entity in &scene.entities {
+                let gpu_mesh = mesh_cache.get_mesh(&entity.mesh);
 
-            for submesh in &gpu_mesh.sub_meshes {
-                list.draw_indexed(
-                    submesh.index_count,
-                    submesh.start_index_location,
-                    submesh.base_vertex_location as i32,
-                );
+                list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
+                list.set_index_buffer(&gpu_mesh.ib);
+
+                for submesh in &gpu_mesh.sub_meshes {
+                    list.draw_indexed(
+                        submesh.index_count,
+                        submesh.start_index_location,
+                        submesh.base_vertex_location as i32,
+                    );
+                }
             }
         }
 

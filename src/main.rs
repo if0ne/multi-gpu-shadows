@@ -8,6 +8,7 @@ mod gltf;
 mod m_csm_pass;
 mod m_shadow_mask_pass;
 mod rhi;
+mod scene;
 mod shadow_mask_pass;
 mod timer;
 mod utils;
@@ -28,11 +29,12 @@ use dir_light_pass_with_mask::DirectionalLightWithMaskPass;
 use gamma_correction_pass::GammaCorrectionPass;
 use gbuffer_pass::GbufferPass;
 use glam::{vec2, vec3, Mat4, Vec2, Vec3};
-use gltf::{GpuMesh, GpuMeshBuilder, Mesh};
+use gltf::{GpuMeshBuilder, Mesh};
 use m_csm_pass::MgpuCascadedShadowMapsPass;
 use m_shadow_mask_pass::{MgpuShadowMaskPass, MgpuState};
 use oxidx::dx;
 use rhi::FRAMES_IN_FLIGHT;
+use scene::{Entity, MeshCache, Scene};
 use timer::GameTimer;
 use tracing_subscriber::{
     fmt::{self, writer::MakeWriterExt},
@@ -143,7 +145,8 @@ pub struct Application {
     pub camera: Camera,
     pub camera_controller: FpsController,
 
-    pub gpu_mesh: GpuMesh,
+    pub scene: Scene,
+    pub mesh_cache: MeshCache,
 
     pub window_width: u32,
     pub window_height: u32,
@@ -200,26 +203,34 @@ impl SingleGpuContext {
         primary_pso_cache: &mut rhi::RasterPipelineCache,
         primary_placeholder: &TexturePlaceholders,
         camera_buffers: &rhi::DeviceBuffer,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
         frame_stats: &mut FrameStats,
     ) {
         let timer = Instant::now();
-        self.csm
-            .render(&primary_gpu, &gpu_mesh, &primary_pso_cache, curr_frame);
+        self.csm.render(
+            primary_gpu,
+            &scene,
+            mesh_cache,
+            primary_pso_cache,
+            curr_frame,
+        );
 
         self.p_zpass.render(
             &primary_gpu,
             &camera_buffers,
             &primary_pso_cache,
             curr_frame,
-            &gpu_mesh,
+            scene,
+            mesh_cache,
         );
 
         self.p_gbuffer.render(
             &primary_gpu,
-            &gpu_mesh,
+            scene,
+            mesh_cache,
             &primary_placeholder,
             &primary_pso_cache,
             &camera_buffers,
@@ -305,7 +316,8 @@ impl MgpuCsmContext {
         primary_placeholder: &TexturePlaceholders,
         camera: &Camera,
         camera_buffers: &rhi::DeviceBuffer,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
         frame_stats: &mut FrameStats,
@@ -336,7 +348,7 @@ impl MgpuCsmContext {
             secondary_gpu.gfx_queue.stash_cmd_buffer(list);
 
             self.mgpu_csm
-                .render(&secondary_gpu, &gpu_mesh, &secondary_pso_cache);
+                .render(&secondary_gpu, scene, mesh_cache, &secondary_pso_cache);
 
             let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
 
@@ -420,12 +432,14 @@ impl MgpuCsmContext {
             &camera_buffers,
             &primary_pso_cache,
             curr_frame,
-            &gpu_mesh,
+            &scene,
+            mesh_cache,
         );
 
         self.p_gbuffer.render(
             &primary_gpu,
-            &gpu_mesh,
+            scene,
+            mesh_cache,
             &primary_placeholder,
             &primary_pso_cache,
             &camera_buffers,
@@ -558,7 +572,8 @@ impl MgpuShadowMaskContext {
         primary_placeholder: &TexturePlaceholders,
         camera: &Camera,
         camera_buffers: &rhi::DeviceBuffer,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
         frame_stats: &mut FrameStats,
@@ -594,11 +609,17 @@ impl MgpuShadowMaskContext {
                 camera_buffers,
                 &secondary_pso_cache,
                 curr_frame,
-                gpu_mesh,
+                scene,
+                mesh_cache,
             );
 
-            self.s_csm
-                .render(secondary_gpu, gpu_mesh, &secondary_pso_cache, curr_frame);
+            self.s_csm.render(
+                secondary_gpu,
+                scene,
+                mesh_cache,
+                &secondary_pso_cache,
+                curr_frame,
+            );
 
             self.mgpu_mask.render(
                 &secondary_gpu,
@@ -688,12 +709,14 @@ impl MgpuShadowMaskContext {
             &camera_buffers,
             &primary_pso_cache,
             curr_frame,
-            &gpu_mesh,
+            scene,
+            mesh_cache,
         );
 
         self.p_gbuffer.render(
             &primary_gpu,
-            &gpu_mesh,
+            scene,
+            mesh_cache,
             &primary_placeholder,
             &primary_pso_cache,
             &camera_buffers,
@@ -872,16 +895,27 @@ impl Application {
             .gfx_queue
             .init_timestamp_query(&secondary_gpu, 2);
 
+        let mut mesh_cache = MeshCache::default();
+
         let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
 
-        let gpu_mesh = GpuMesh::new(GpuMeshBuilder {
-            mesh,
-            devices: &[&primary_gpu, &secondary_gpu],
-            normal_vb: primary_gpu.id,
-            uv_vb: primary_gpu.id,
-            tangent_vb: primary_gpu.id,
-            materials: primary_gpu.id,
-        });
+        let mesh_handle = mesh_cache.get_mesh_by_name(
+            "Fanstasy Island",
+            GpuMeshBuilder {
+                mesh,
+                devices: &[&primary_gpu, &secondary_gpu],
+                normal_vb: primary_gpu.id,
+                uv_vb: primary_gpu.id,
+                tangent_vb: primary_gpu.id,
+                materials: primary_gpu.id,
+            },
+        );
+
+        let mut entity = Entity::new(mesh_handle, &[&primary_gpu, &secondary_gpu]);
+
+        let scene = Scene {
+            entities: vec![entity],
+        };
 
         let mut shader_cache = rhi::ShaderCache::default();
 
@@ -956,7 +990,6 @@ impl Application {
             window_width: width,
             window_height: height,
             keys: HashMap::new(),
-            gpu_mesh,
 
             single_gpu,
             mgpu_csm,
@@ -964,6 +997,9 @@ impl Application {
 
             curr_context: RenderContext::SingleGpu,
             stats: Vec::new(),
+
+            scene,
+            mesh_cache,
         }
     }
 
@@ -1064,7 +1100,8 @@ impl Application {
                     &mut self.primary_pso_cache,
                     &self.primary_placeholder,
                     &self.camera_buffers,
-                    &self.gpu_mesh,
+                    &self.scene,
+                    &self.mesh_cache,
                     self.curr_frame,
                     &view,
                     &mut frame_stat,
@@ -1079,7 +1116,8 @@ impl Application {
                     &self.primary_placeholder,
                     &self.camera,
                     &self.camera_buffers,
-                    &self.gpu_mesh,
+                    &self.scene,
+                    &self.mesh_cache,
                     self.curr_frame,
                     view,
                     &mut frame_stat,
@@ -1094,7 +1132,8 @@ impl Application {
                     &self.primary_placeholder,
                     &self.camera,
                     &self.camera_buffers,
-                    &self.gpu_mesh,
+                    &self.scene,
+                    &self.mesh_cache,
                     self.curr_frame,
                     view,
                     &mut frame_stat,

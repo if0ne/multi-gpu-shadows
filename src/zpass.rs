@@ -2,7 +2,11 @@ use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use oxidx::dx;
 
-use crate::{gltf::GpuMesh, rhi};
+use crate::{
+    gltf::GpuMesh,
+    rhi,
+    scene::{MeshCache, Scene},
+};
 
 #[derive(Debug)]
 pub struct ZPass {
@@ -109,7 +113,8 @@ impl ZPass {
         camera_buffer: &rhi::DeviceBuffer,
         pso_cache: &rhi::RasterPipelineCache,
         frame_idx: usize,
-        gpu_mesh: &GpuMesh,
+        scene: &Scene,
+        mesh_cache: &MeshCache,
     ) {
         let list = device.gfx_queue.get_command_buffer(&device);
 
@@ -122,15 +127,19 @@ impl ZPass {
         list.set_render_targets(&[], Some(&self.depth_dsv));
         list.set_graphics_cbv(&camera_buffer.cbv[frame_idx], 0);
 
-        list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
-        list.set_index_buffer(&gpu_mesh.ib);
+        for entity in &scene.entities {
+            let gpu_mesh = mesh_cache.get_mesh(&entity.mesh);
 
-        for submesh in &gpu_mesh.sub_meshes {
-            list.draw_indexed(
-                submesh.index_count,
-                submesh.start_index_location,
-                submesh.base_vertex_location as i32,
-            );
+            list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
+            list.set_index_buffer(&gpu_mesh.ib);
+
+            for submesh in &gpu_mesh.sub_meshes {
+                list.draw_indexed(
+                    submesh.index_count,
+                    submesh.start_index_location,
+                    submesh.base_vertex_location as i32,
+                );
+            }
         }
 
         device.gfx_queue.stash_cmd_buffer(list);
