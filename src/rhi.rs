@@ -2595,7 +2595,7 @@ impl CommandBuffer {
         self.list.resolve_query_data(
             &timestamp.raw,
             dx::QueryType::Timestamp,
-            range,
+            range.clone(),
             &timestamp.resolve_buffer.res.res,
             size_of::<u64>() * range.start,
         );
