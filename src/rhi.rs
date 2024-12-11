@@ -1390,12 +1390,27 @@ impl DeviceTextureView {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum PresentMode {
+    Immediate,
+    Mailbox,
+    Fifo,
+}
+
+#[derive(Debug)]
+pub struct SwapchainImage {
+    pub texture: DeviceTexture,
+    pub rtv: DeviceTextureView,
+    pub last_access: u64,
+}
+
 pub struct Swapchain {
     pub swapchain: dx::Swapchain1,
     pub hwnd: NonZero<isize>,
-    pub resources: Vec<(dx::Resource, DeviceTexture, DeviceTextureView, u64)>,
+    pub resources: Vec<SwapchainImage>,
     pub width: u32,
     pub height: u32,
+    pub present_mode: PresentMode,
 }
 
 impl Swapchain {
@@ -1405,13 +1420,14 @@ impl Swapchain {
         width: u32,
         height: u32,
         hwnd: NonZero<isize>,
+        present_mode: PresentMode,
     ) -> Self {
         let desc = dx::SwapchainDesc1::new(width, height)
             .with_format(dx::Format::Rgba8Unorm)
             .with_usage(dx::FrameBufferUsage::RenderTargetOutput)
             .with_buffer_count(FRAMES_IN_FLIGHT)
             .with_scaling(dx::Scaling::None)
-            .with_swap_effect(dx::SwapEffect::FlipSequential)
+            .with_swap_effect(dx::SwapEffect::FlipDiscard)
             .with_flags(dx::SwapchainFlags::AllowTearing);
 
         let swapchain = factory
@@ -1430,6 +1446,7 @@ impl Swapchain {
             resources: vec![],
             width,
             height,
+            present_mode,
         };
         swapchain.resize(device, width, height, 0);
 
@@ -1460,7 +1477,7 @@ impl Swapchain {
             let texture = DeviceTexture {
                 res: DeviceResource {
                     device_id: device.id,
-                    res: res.clone(),
+                    res: res,
                     name: "Swapchain Image".to_string(),
                     uuid: 0,
                 },
@@ -1481,15 +1498,23 @@ impl Swapchain {
                 None,
             );
 
-            self.resources.push((res, texture, view, sync_point));
+            self.resources.push(SwapchainImage {
+                texture,
+                rtv: view,
+                last_access: sync_point,
+            });
         }
     }
 
-    pub fn present(&self, vsync: bool) {
-        let interval = if vsync { 1 } else { 0 };
+    pub fn present(&self) {
+        let (interval, flags) = match self.present_mode {
+            PresentMode::Immediate => (0, dx::PresentFlags::AllowTearing),
+            PresentMode::Mailbox => (0, dx::PresentFlags::empty()),
+            PresentMode::Fifo => (1, dx::PresentFlags::empty()),
+        };
 
         self.swapchain
-            .present(interval, dx::PresentFlags::AllowTearing)
+            .present(interval, flags)
             .expect("Failed to present");
     }
 }

@@ -1098,7 +1098,12 @@ impl Application {
             .primary_gpu
             .gfx_queue
             .get_command_buffer(&self.primary_gpu);
-        let (_, texture, view, sync_point) = &mut ctx.swapchain.resources[self.curr_frame];
+
+        let rhi::SwapchainImage {
+            texture,
+            rtv,
+            last_access,
+        } = &mut ctx.swapchain.resources[self.curr_frame];
 
         list.begin(&self.primary_gpu);
         list.set_device_texture_barrier(texture, dx::ResourceStates::RenderTarget, None);
@@ -1119,7 +1124,7 @@ impl Application {
                     &self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
-                    &view,
+                    &rtv,
                     &mut frame_stat,
                 );
             }
@@ -1135,7 +1140,7 @@ impl Application {
                     &self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
-                    view,
+                    rtv,
                     &mut frame_stat,
                 );
             }
@@ -1154,7 +1159,7 @@ impl Application {
                     &self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
-                    view,
+                    rtv,
                     &mut frame_stat,
                 );
             }
@@ -1173,14 +1178,14 @@ impl Application {
         list.set_device_texture_barrier(texture, dx::ResourceStates::Present, None);
 
         self.primary_gpu.gfx_queue.push_cmd_buffer(list);
-        *sync_point = self.primary_gpu.gfx_queue.execute();
-        ctx.swapchain.present(false);
+        *last_access = self.primary_gpu.gfx_queue.execute();
+        ctx.swapchain.present();
         self.curr_frame = (self.curr_frame + 1) % FRAMES_IN_FLIGHT;
         self.frame_num += 1;
 
         self.primary_gpu
             .gfx_queue
-            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].3);
+            .wait_on_cpu(ctx.swapchain.resources[self.curr_frame].last_access);
 
         if let Some(query) = &mut *self.primary_gpu.gfx_queue.timestamp_query.lock() {
             let mut gfx_timestamp = [0u64; 2];
@@ -1207,6 +1212,7 @@ impl Application {
             self.window_width,
             self.window_height,
             hwnd,
+            rhi::PresentMode::Fifo,
         );
 
         self.wnd_ctx = Some(WindowContext {
