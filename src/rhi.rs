@@ -2572,7 +2572,7 @@ impl CommandBuffer {
             dx::QueryType::Timestamp,
             range,
             &timestamp.resolve_buffer.res.res,
-            0,
+            size_of::<u64>() * range.start,
         );
     }
 
