@@ -57,7 +57,10 @@ impl ZPass {
         let rs = Rc::new(rhi::RootSignature::new(
             &device,
             rhi::RootSignatureDesc {
-                entries: vec![rhi::BindingEntry::Cbv { num: 1, slot: 0 }],
+                entries: vec![
+                    rhi::BindingEntry::Cbv { num: 1, slot: 0 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 1 },
+                ],
                 static_samplers: vec![],
                 bindless: false,
             },
@@ -129,6 +132,14 @@ impl ZPass {
         for entity in &scene.entities {
             let gpu_mesh = mesh_cache.get_mesh(&entity.mesh);
 
+            list.set_graphics_cbv(
+                &entity
+                    .gpu_transform
+                    .get_buffer(list.device_id)
+                    .expect("Failed to get buffer")
+                    .cbv[frame_idx],
+                1,
+            );
             list.set_vertex_buffers(&[&gpu_mesh.pos_vb]);
             list.set_index_buffer(&gpu_mesh.ib);
 

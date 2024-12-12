@@ -178,8 +178,9 @@ impl GbufferPass {
                 entries: vec![
                     rhi::BindingEntry::Cbv { num: 1, slot: 0 },
                     rhi::BindingEntry::Cbv { num: 1, slot: 1 },
-                    rhi::BindingEntry::Srv { num: 1, slot: 2 },
+                    rhi::BindingEntry::Cbv { num: 1, slot: 2 },
                     rhi::BindingEntry::Srv { num: 1, slot: 3 },
+                    rhi::BindingEntry::Srv { num: 1, slot: 4 },
                 ],
                 static_samplers: vec![rhi::StaticSampler {
                     slot: 0,
@@ -332,18 +333,16 @@ impl GbufferPass {
                     1,
                 );
 
-                if let Some(map) = gpu_mesh.materials[submesh.material_idx].diffuse_map {
-                    list.set_graphics_srv(
-                        &gpu_mesh.image_views[map]
-                            .get_view(device.id)
-                            .expect("Not found texture view"),
-                        2,
-                    );
-                } else {
-                    list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 2);
-                }
+                list.set_graphics_cbv(
+                    &entity
+                        .gpu_transform
+                        .get_buffer(list.device_id)
+                        .expect("Failed to get buffer")
+                        .cbv[frame_idx],
+                    2,
+                );
 
-                if let Some(map) = gpu_mesh.materials[submesh.material_idx].normal_map {
+                if let Some(map) = gpu_mesh.materials[submesh.material_idx].diffuse_map {
                     list.set_graphics_srv(
                         &gpu_mesh.image_views[map]
                             .get_view(device.id)
@@ -351,7 +350,18 @@ impl GbufferPass {
                         3,
                     );
                 } else {
-                    list.set_graphics_srv(&placeholder.normal_placeholder_view, 3);
+                    list.set_graphics_srv(&placeholder.diffuse_placeholder_view, 3);
+                }
+
+                if let Some(map) = gpu_mesh.materials[submesh.material_idx].normal_map {
+                    list.set_graphics_srv(
+                        &gpu_mesh.image_views[map]
+                            .get_view(device.id)
+                            .expect("Not found texture view"),
+                        4,
+                    );
+                } else {
+                    list.set_graphics_srv(&placeholder.normal_placeholder_view, 4);
                 }
 
                 list.draw_indexed(

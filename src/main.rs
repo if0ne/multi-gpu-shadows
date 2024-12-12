@@ -313,7 +313,7 @@ impl MgpuCsmContext {
         primary_placeholder: &TexturePlaceholders,
         camera: &Camera,
         camera_buffers: &rhi::DeviceBuffer,
-        scene: &Scene,
+        scene: &mut Scene,
         mesh_cache: &MeshCache,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
@@ -326,6 +326,10 @@ impl MgpuCsmContext {
             && self.mgpu_csm.states[working_texture] == MgpuState::WaitForWrite
         {
             self.mgpu_csm.update(camera, vec3(-1.0, -1.0, -1.0));
+
+            for entity in &mut scene.entities {
+                entity.update_gpu_resource(working_texture, &secondary_gpu);
+            }
 
             let list = secondary_gpu.gfx_queue.get_command_buffer(&secondary_gpu);
 
@@ -572,7 +576,7 @@ impl MgpuShadowMaskContext {
         camera_buffers: &mut rhi::DeviceBuffer,
         width: u32,
         height: u32,
-        scene: &Scene,
+        scene: &mut Scene,
         mesh_cache: &MeshCache,
         curr_frame: usize,
         swapchain_view: &rhi::DeviceTextureView,
@@ -600,6 +604,10 @@ impl MgpuShadowMaskContext {
                     _pad1: Vec2::ZERO,
                 },
             );
+
+            for entity in &mut scene.entities {
+                entity.update_gpu_resource(working_texture, &secondary_gpu);
+            }
 
             self.s_csm
                 .update(camera, vec3(-1.0, -1.0, -1.0), working_texture);
@@ -1079,6 +1087,10 @@ impl Application {
             },
         );
 
+        for entity in &mut self.scene.entities {
+            entity.update_gpu_resource(self.curr_frame, &self.primary_gpu);
+        }
+
         self.single_gpu
             .csm
             .update(&self.camera, vec3(-1.0, -1.0, -1.0), self.curr_frame);
@@ -1137,7 +1149,7 @@ impl Application {
                     &self.primary_placeholder,
                     &self.camera,
                     &self.camera_buffers,
-                    &self.scene,
+                    &mut self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
                     rtv,
@@ -1156,7 +1168,7 @@ impl Application {
                     &mut self.camera_buffers,
                     self.window_width,
                     self.window_height,
-                    &self.scene,
+                    &mut self.scene,
                     &self.mesh_cache,
                     self.curr_frame,
                     rtv,

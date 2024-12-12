@@ -9,8 +9,13 @@ cbuffer MaterialBuffer : register(b1) {
     Material material_data;
 }
 
-Texture2D diffuse_t : register(t2);
-Texture2D normal_t : register(t3);
+cbuffer ObjectTransform : register(b2)
+{
+    matrix transform;
+}
+
+Texture2D diffuse_t : register(t3);
+Texture2D normal_t : register(t4);
 
 SamplerState linear_clamp_s : register(s0);
 
@@ -33,11 +38,11 @@ struct PixelInput {
 PixelInput VSMain(VertexInput input) {
     PixelInput output = (PixelInput) 0;
 	
-    float4 world_pos = float4(input.pos, 1.0f);
+    float4 world_pos = mul(transform, float4(input.pos, 1.0f));
     output.pos_w = world_pos.xyz;
     output.pos = mul(g_data.proj_view, world_pos);
-    output.normal = input.normal;
-    output.tangent = input.tangent.xyz;
+    output.normal = mul(transform, input.normal);
+    output.tangent = mul(transform, input.tangent.xyz);
     output.bitangent = normalize(cross(output.normal, output.tangent));
     output.uv = input.uv;
 	
