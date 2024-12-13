@@ -5,6 +5,7 @@ mod dir_light_pass_with_mask;
 mod gamma_correction_pass;
 mod gbuffer_pass;
 mod gltf;
+mod gui;
 mod m_csm_pass;
 mod m_shadow_mask_pass;
 mod rhi;
@@ -30,6 +31,7 @@ use gamma_correction_pass::GammaCorrectionPass;
 use gbuffer_pass::GbufferPass;
 use glam::{vec2, vec3, Mat4, Vec2, Vec3};
 use gltf::{GpuMeshBuilder, Mesh};
+use gui::Gui;
 use m_csm_pass::MgpuCascadedShadowMapsPass;
 use m_shadow_mask_pass::{MgpuShadowMaskPass, MgpuState};
 use oxidx::dx;
@@ -52,6 +54,8 @@ pub struct WindowContext {
     pub window: Window,
     pub hwnd: NonZero<isize>,
     pub swapchain: rhi::Swapchain,
+
+    pub gui: Gui,
 }
 
 #[derive(Clone, Debug)]
@@ -1177,6 +1181,17 @@ impl Application {
             }
         }
 
+        ctx.gui.immediate_ui(&ctx.window, |gui| {
+            let ctx = gui.context();
+            egui::CentralPanel::default().show(&ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add(egui::widgets::Label::new("Hi there!"));
+                    ui.label(egui::RichText::new("Rich Text").size(32.0));
+                });
+                ui.separator();
+            });
+        });
+
         let list = self
             .primary_gpu
             .gfx_queue
@@ -1227,10 +1242,13 @@ impl Application {
             rhi::PresentMode::Fifo,
         );
 
+        let gui = Gui::new(&window);
+
         self.wnd_ctx = Some(WindowContext {
             window,
             hwnd,
             swapchain,
+            gui,
         });
     }
 
@@ -1296,6 +1314,16 @@ impl ApplicationHandler for Application {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        {
+            let Some(ref mut context) = self.wnd_ctx else {
+                return;
+            };
+
+            if context.gui.update(&context.window, &event) {
+                return;
+            }
+        }
+
         match event {
             WindowEvent::Focused(focused) => {
                 if focused {

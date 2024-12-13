@@ -2778,6 +2778,21 @@ impl CommandBuffer {
         self.list.rs_set_scissor_rects(&[rect]);
     }
 
+    pub fn set_viewport_only(&self, width: u32, height: u32) {
+        let viewport = dx::Viewport::from_size((width as f32, height as f32));
+
+        self.list.rs_set_viewports(&[viewport]);
+    }
+
+    pub fn set_scissors(&self, left: u32, top: u32, right: u32, bottom: u32) {
+        let rect = dx::Rect::default()
+            .with_size((right as i32, bottom as i32))
+            .with_left(left as i32)
+            .with_top(top as i32);
+
+        self.list.rs_set_scissor_rects(&[rect]);
+    }
+
     pub fn set_viewport_with_offset(&self, width: u32, height: u32, left: u32, top: u32) {
         let viewport = dx::Viewport::from_position_and_size(
             (left as f32, top as f32),
