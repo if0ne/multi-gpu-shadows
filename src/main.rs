@@ -183,7 +183,7 @@ impl SingleGpuContext {
             GammaCorrectionPass::new(&primary_gpu, shader_cache, primary_pso_cache);
 
         let csm =
-            CascadedShadowMapsPass::new(&primary_gpu, 1024, 0.5, shader_cache, primary_pso_cache);
+            CascadedShadowMapsPass::new(&primary_gpu, 2048, 0.5, shader_cache, primary_pso_cache);
 
         Self {
             p_zpass,
@@ -289,7 +289,7 @@ impl MgpuCsmContext {
         let mgpu_csm = MgpuCascadedShadowMapsPass::new(
             &primary_gpu,
             &secondary_gpu,
-            1024,
+            2048,
             0.5,
             shader_cache,
             secondary_pso_cache,
@@ -538,7 +538,7 @@ impl MgpuShadowMaskContext {
         );
         let s_csm = CascadedShadowMapsPass::new(
             &secondary_gpu,
-            1024,
+            2048,
             0.5,
             shader_cache,
             secondary_pso_cache,
@@ -921,7 +921,7 @@ impl Application {
 
         let mut mesh_cache = MeshCache::default();
 
-        let mesh = Mesh::load("./assets/fantasy_island/scene.gltf");
+        let mesh = Mesh::load("./assets/full_gameready_city_buildings/scene.gltf");
 
         let mesh_handle = mesh_cache.get_mesh_by_name(
             "Fanstasy Island",
@@ -936,6 +936,7 @@ impl Application {
         );
 
         let mut entity = Entity::new(mesh_handle, &[&primary_gpu, &secondary_gpu]);
+        entity.scale = 15.0;
 
         let scene = Scene {
             entities: vec![entity],
@@ -1019,7 +1020,7 @@ impl Application {
             mgpu_csm,
             mgpu_shadow_mask,
 
-            curr_context: RenderContext::MgpuShadowMask,
+            curr_context: RenderContext::SingleGpu,
             stats: Vec::new(),
 
             scene,
