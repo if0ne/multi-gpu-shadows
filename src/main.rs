@@ -1,4 +1,5 @@
 mod camera;
+mod core;
 mod csm_pass;
 mod dir_light_pass;
 mod dir_light_pass_with_mask;
