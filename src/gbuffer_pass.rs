@@ -251,6 +251,7 @@ impl GbufferPass {
                 depth_bias: 0,
                 slope_bias: 0.0,
                 cull_mode: rhi::CullMode::Back,
+                depth_clip: true,
             },
             &shader_cache,
         );

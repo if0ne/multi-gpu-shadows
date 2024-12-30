@@ -1889,6 +1889,7 @@ pub struct RasterPipelineDesc {
     pub vs: ShaderHandle,
     pub shaders: Vec<ShaderHandle>,
     pub cull_mode: CullMode,
+    pub depth_clip: bool,
 }
 
 impl Hash for RasterPipelineDesc {
@@ -1937,6 +1938,22 @@ impl RasterPipeline {
             .map(|el| dx::InputElementDesc::per_vertex(el.semantic, el.format, el.slot))
             .collect::<Vec<_>>();
 
+        let mut rast = dx::RasterizerDesc::default()
+            .with_fill_mode(if desc.wireframe {
+                dx::FillMode::Wireframe
+            } else {
+                dx::FillMode::Solid
+            })
+            .with_cull_mode(desc.cull_mode.as_dx())
+            .with_depth_bias(desc.depth_bias)
+            .with_slope_scaled_depth_bias(desc.slope_bias);
+
+        let rast = if desc.depth_clip {
+            rast.enable_depth_clip()
+        } else {
+            rast
+        };
+
         let de = dx::GraphicsPipelineDesc::new(&vert.raw)
             .with_input_layout(&input_element_desc)
             .with_blend_desc(
@@ -1947,17 +1964,7 @@ impl RasterPipeline {
                 ),
             )
             .with_render_targets(desc.formats.clone())
-            .with_rasterizer_state(
-                dx::RasterizerDesc::default()
-                    .with_fill_mode(if desc.wireframe {
-                        dx::FillMode::Wireframe
-                    } else {
-                        dx::FillMode::Solid
-                    })
-                    .with_cull_mode(desc.cull_mode.as_dx())
-                    .with_depth_bias(desc.depth_bias)
-                    .with_slope_scaled_depth_bias(desc.slope_bias),
-            )
+            .with_rasterizer_state(rast)
             .with_primitive_topology(if desc.line {
                 dx::PipelinePrimitiveTopology::Line
             } else {

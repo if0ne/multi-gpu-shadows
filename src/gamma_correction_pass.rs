@@ -70,6 +70,7 @@ impl GammaCorrectionPass {
                 depth_bias: 0,
                 slope_bias: 0.0,
                 cull_mode: rhi::CullMode::None,
+                depth_clip: false,
             },
             &shader_cache,
         );

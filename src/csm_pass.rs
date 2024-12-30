@@ -129,6 +129,7 @@ impl CascadedShadowMapsPass {
                 depth_bias: 10000,
                 slope_bias: 5.0,
                 cull_mode: rhi::CullMode::Back,
+                depth_clip: false,
             },
             &shader_cache,
         );

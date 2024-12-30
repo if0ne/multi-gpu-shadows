@@ -183,7 +183,7 @@ impl SingleGpuContext {
             GammaCorrectionPass::new(&primary_gpu, shader_cache, primary_pso_cache);
 
         let csm =
-            CascadedShadowMapsPass::new(&primary_gpu, 2048, 0.5, shader_cache, primary_pso_cache);
+            CascadedShadowMapsPass::new(&primary_gpu, 2 * 2048, 0.5, shader_cache, primary_pso_cache);
 
         Self {
             p_zpass,
@@ -289,7 +289,7 @@ impl MgpuCsmContext {
         let mgpu_csm = MgpuCascadedShadowMapsPass::new(
             &primary_gpu,
             &secondary_gpu,
-            2048,
+            2 * 2048,
             0.5,
             shader_cache,
             secondary_pso_cache,
@@ -538,7 +538,7 @@ impl MgpuShadowMaskContext {
         );
         let s_csm = CascadedShadowMapsPass::new(
             &secondary_gpu,
-            2048,
+            2 * 2048,
             0.5,
             shader_cache,
             secondary_pso_cache,
@@ -936,7 +936,7 @@ impl Application {
         );
 
         let mut entity = Entity::new(mesh_handle, &[&primary_gpu, &secondary_gpu]);
-        entity.scale = 15.0;
+        entity.scale = 10.0;
 
         let scene = Scene {
             entities: vec![entity],
@@ -951,7 +951,7 @@ impl Application {
 
         let camera = Camera {
             view: glam::Mat4::IDENTITY,
-            far: 500.0,
+            far: 1000.0,
             near: 0.1,
             fov: 90.0f32.to_radians(),
             aspect_ratio: width as f32 / height as f32,
